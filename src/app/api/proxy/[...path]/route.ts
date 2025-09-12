@@ -91,24 +91,16 @@ async function handleRequest(
             try {
               const requestData = JSON.parse(body)
               
-              // 提取自定义base_url和api_key
+              // 检查是否有自定义base_url和api_key参数
               if (requestData.base_url) {
                 customBaseUrl = requestData.base_url
-                // 从请求体中移除base_url，避免传递给后端
-                delete requestData.base_url
               }
               if (requestData.api_key) {
                 customApiKey = requestData.api_key
-                // 从请求体中移除api_key，避免传递给后端
-                delete requestData.api_key
               }
               
-              // 如果有自定义配置，更新URL
-              if (customBaseUrl) {
-                // 构建新的URL，保持原有路径但使用自定义base_url
-                const pathFromApi = path.replace('api/v1/', '')
-                url = `${customBaseUrl}/${pathFromApi}${searchParams ? `?${searchParams}` : ''}`
-              }
+              // 注意：保留自定义参数传递给后端，让后端决定如何处理
+              // 代理目标始终是默认的后端服务器，不因自定义配置而改变
               
               body = JSON.stringify(requestData)
             } catch (parseError) {
