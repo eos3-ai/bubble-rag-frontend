@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* 文本截断工具类 */
+.text-ellipsis-multiline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-1 {
+  -webkit-line-clamp: 1;
+}
+
+.line-clamp-2 {
+  -webkit-line-clamp: 2;
+}
+
+.line-clamp-3 {
+  -webkit-line-clamp: 3;
+}
+
+/* 确保卡片高度一致 */
+.knowledge-card {
+  height: 256px;
+  display: flex;
+  flex-direction: column;
+}
+
+.knowledge-card-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* 输入框和文本域的自定义焦点样式 */
+input:focus,
+textarea:focus,
+select:focus,
+.focus\:outline-none:focus {
+  outline: none !important;
+  border-color: #3b82f6 !important; /* 蓝色边框 */
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1) !important; /* 蓝色阴影 */
+  ring: none !important;
+}
+
+/* 针对shadcn/ui组件的特定样式 */
+.border-input:focus,
+.border-input:focus-visible {
+  outline: none !important;
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1) !important;
+}
+
+/* 隐藏Next.js开发面板 */
+[data-nextjs-dev-ui="true"],
+[data-nextjs-dev-ui],
+.__next-dev-ui-root,
+.__next-build-watcher,
+.__next-dev-overlay,
+div[id*="next-dev"],
+#__next-build-watcher,
+div[class*="__next-dev"],
+nextjs-portal {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=/api/proxy
+      - API_BASE_URL=http://backend:12420/bubble_rag
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
