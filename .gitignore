@@ -43,3 +43,6 @@ next-env.d.ts
 
 # project documentation
 request.md
+
+# claude code settings
+.claude
