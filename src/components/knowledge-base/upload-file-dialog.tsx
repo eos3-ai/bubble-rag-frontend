@@ -4,6 +4,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
 import {
   Dialog,
   DialogContent,
@@ -17,13 +18,18 @@ import { Upload, FileText, X, Plus } from "lucide-react"
 interface UploadFileDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onUpload: (files: File[], chunkSize: number) => Promise<void>
+  onUpload: (files: File[], chunkSize: number, options?: { data_clean?: string, semantic_split?: string, small2big?: string }) => Promise<void>
 }
 
 export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDialogProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [chunkSize, setChunkSize] = useState(1000)
   const [uploading, setUploading] = useState(false)
+
+  // 新增的三个开关字段
+  const [dataClean, setDataClean] = useState(false)
+  const [semanticSplit, setSemanticSplit] = useState(false)
+  const [small2big, setSmall2big] = useState(false)
 
   // 处理文件选择
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -42,11 +48,19 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDia
 
     try {
       setUploading(true)
-      await onUpload(selectedFiles, chunkSize)
-      
+      // 传递开关参数
+      await onUpload(selectedFiles, chunkSize, {
+        data_clean: dataClean ? '1' : '0',
+        semantic_split: semanticSplit ? '1' : '0',
+        small2big: small2big ? '1' : '0'
+      })
+
       // 重置状态
       setSelectedFiles([])
       setChunkSize(1000)
+      setDataClean(false)
+      setSemanticSplit(false)
+      setSmall2big(false)
       onOpenChange(false)
     } finally {
       setUploading(false)
@@ -57,13 +71,16 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDia
   const handleClose = () => {
     setSelectedFiles([])
     setChunkSize(1000)
+    setDataClean(false)
+    setSemanticSplit(false)
+    setSmall2big(false)
     onOpenChange(false)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl">
-        <DialogHeader className="pb-6">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-white/20 shadow-2xl rounded-2xl flex flex-col">
+        <DialogHeader className="pb-4 flex-shrink-0">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
               <Upload className="h-5 w-5 text-white" />
@@ -77,13 +94,13 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDia
           </DialogDescription>
         </DialogHeader>
 
-        <div className="py-4 space-y-6">
+        <div className="flex-1 overflow-y-auto py-2 space-y-4">
           {/* 文件选择区域 */}
           <div className="space-y-4">
             <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">
               选择文件
             </Label>
-            <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-8 text-center">
+            <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-6 text-center">
               <input
                 type="file"
                 multiple
@@ -93,11 +110,11 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDia
                 id="file-upload"
               />
               <label htmlFor="file-upload" className="cursor-pointer">
-                <Upload className="h-12 w-12 text-slate-400 mx-auto mb-4" />
-                <p className="text-slate-600 dark:text-slate-400 mb-2">
+                <Upload className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                <p className="text-slate-600 dark:text-slate-400 mb-1">
                   点击选择文件或拖拽文件到此处
                 </p>
-                <p className="text-sm text-slate-500">
+                <p className="text-xs text-slate-500">
                   支持 PDF、TXT、MD、DOC、DOCX、JSON、CSV 格式
                 </p>
               </label>
@@ -109,9 +126,9 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDia
                 <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   已选择文件 ({selectedFiles.length})
                 </Label>
-                <div className="space-y-2 max-h-32 overflow-y-auto">
+                <div className="space-y-2 max-h-24 overflow-y-auto">
                   {selectedFiles.map((file, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                    <div key={index} className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg">
                       <div className="flex items-center gap-3">
                         <FileText className="h-4 w-4 text-slate-500" />
                         <span className="text-sm text-slate-700 dark:text-slate-300 truncate">
@@ -163,10 +180,110 @@ export function UploadFileDialog({ open, onOpenChange, onUpload }: UploadFileDia
                 分块大小影响文档检索精度，较小的值提供更精确的匹配，较大的值提供更多上下文
               </p>
             </div>
+
+            {/* 数据处理选项 */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                数据处理选项
+              </Label>
+
+              {/* 数据清洗 */}
+              <div className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all duration-200 ${
+                dataClean
+                  ? 'bg-purple-50 border-purple-200 shadow-sm'
+                  : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+              }`}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className={`w-2 h-2 rounded-full ${dataClean ? 'bg-purple-500' : 'bg-slate-300'}`}></div>
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      数据清洗
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      dataClean
+                        ? 'bg-purple-100 text-purple-700'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {dataClean ? '开启' : '关闭'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    开启后会自动清理文档中的无关信息和格式
+                  </div>
+                </div>
+                <Switch
+                  checked={dataClean}
+                  onCheckedChange={setDataClean}
+                  className="ml-4 data-[state=checked]:bg-purple-600 data-[state=unchecked]:bg-slate-300 scale-110"
+                />
+              </div>
+
+              {/* 语义分块 */}
+              <div className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all duration-200 ${
+                semanticSplit
+                  ? 'bg-emerald-50 border-emerald-200 shadow-sm'
+                  : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+              }`}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className={`w-2 h-2 rounded-full ${semanticSplit ? 'bg-emerald-500' : 'bg-slate-300'}`}></div>
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      语义分块
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      semanticSplit
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {semanticSplit ? '开启' : '关闭'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    使用语义理解进行智能分块，提高检索准确性
+                  </div>
+                </div>
+                <Switch
+                  checked={semanticSplit}
+                  onCheckedChange={setSemanticSplit}
+                  className="ml-4 data-[state=checked]:bg-emerald-600 data-[state=unchecked]:bg-slate-300 scale-110"
+                />
+              </div>
+
+              {/* Small2Big */}
+              <div className={`flex items-center justify-between p-3 rounded-lg border-2 transition-all duration-200 ${
+                small2big
+                  ? 'bg-amber-50 border-amber-200 shadow-sm'
+                  : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+              }`}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className={`w-2 h-2 rounded-full ${small2big ? 'bg-amber-500' : 'bg-slate-300'}`}></div>
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      Small2Big 优化
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      small2big
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {small2big ? '开启' : '关闭'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    启用小块到大块的检索优化策略
+                  </div>
+                </div>
+                <Switch
+                  checked={small2big}
+                  onCheckedChange={setSmall2big}
+                  className="ml-4 data-[state=checked]:bg-amber-600 data-[state=unchecked]:bg-slate-300 scale-110"
+                />
+              </div>
+            </div>
           </div>
         </div>
 
-        <DialogFooter className="gap-3 pt-6">
+        <DialogFooter className="gap-3 pt-4 flex-shrink-0 border-t border-slate-200">
           <Button 
             variant="outline" 
             onClick={handleClose}

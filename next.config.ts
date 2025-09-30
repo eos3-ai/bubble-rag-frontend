@@ -23,7 +23,7 @@ const nextConfig: NextConfig = {
   
   /* 图片配置 */
   images: {
-    domains: ['localhost'],
+    domains: ['localhost', '172.16.10.105'],
   },
   
   /* 跨域配置 */

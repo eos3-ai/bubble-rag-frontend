@@ -156,13 +156,14 @@ export default function DocumentsPage() {
   }
 
   // 处理文件上传（新的独立方法）
-  const handleFileUpload = async (files: File[], chunkSize: number) => {
+  const handleFileUpload = async (files: File[], chunkSize: number, options?: { data_clean?: string, semantic_split?: string, small2big?: string }) => {
     try {
       // 上传文件
       await documentService.uploadFile({
         files: files,
         doc_knowledge_base_id: kbId,
-        chunk_size: chunkSize
+        chunk_size: chunkSize,
+        ...options // 传递新的选项参数
       })
       
       toast({
@@ -836,6 +837,8 @@ export default function DocumentsPage() {
                     <>
                       <TableHead className="text-gray-700 font-semibold">文档标题</TableHead>
                       <TableHead className="text-gray-700 font-semibold">文档内容</TableHead>
+                      <TableHead className="text-gray-700 font-semibold text-center">语义分块</TableHead>
+                      <TableHead className="text-gray-700 font-semibold text-center">数据清洗</TableHead>
                       <TableHead className="text-right text-gray-700 font-semibold">操作</TableHead>
                     </>
                   ) : (
@@ -887,6 +890,79 @@ export default function DocumentsPage() {
                             )}
                           </div>
                         </TableCell>
+
+                        {/* 语义分块状态列 */}
+                        <TableCell className="text-center">
+                          {(() => {
+                            const semanticSplit = (doc as any).semantic_split
+                            if (semanticSplit === -1) {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-gray-400 rounded-full mr-1"></div>
+                                  不需要
+                                </div>
+                              )
+                            } else if (semanticSplit === 0) {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-yellow-500 rounded-full mr-1"></div>
+                                  未分块
+                                </div>
+                              )
+                            } else if (semanticSplit === 1) {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-green-500 rounded-full mr-1"></div>
+                                  已完成
+                                </div>
+                              )
+                            } else {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-gray-300 rounded-full mr-1"></div>
+                                  未知
+                                </div>
+                              )
+                            }
+                          })()}
+                        </TableCell>
+
+                        {/* 数据清洗状态列 */}
+                        <TableCell className="text-center">
+                          {(() => {
+                            const dataClean = (doc as any).data_clean
+                            if (dataClean === -1) {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-gray-400 rounded-full mr-1"></div>
+                                  不需要
+                                </div>
+                              )
+                            } else if (dataClean === 0) {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-red-500 rounded-full mr-1"></div>
+                                  未清洗
+                                </div>
+                              )
+                            } else if (dataClean === 1) {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-blue-500 rounded-full mr-1"></div>
+                                  已清洗
+                                </div>
+                              )
+                            } else {
+                              return (
+                                <div className="inline-flex items-center px-2 py-1 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">
+                                  <div className="w-2 h-2 bg-gray-300 rounded-full mr-1"></div>
+                                  未知
+                                </div>
+                              )
+                            }
+                          })()}
+                        </TableCell>
+
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
                             <Button

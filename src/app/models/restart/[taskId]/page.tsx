@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -33,7 +33,9 @@ import {
   Cpu,
   Sparkles,
   Plus,
-  Gauge
+  Gauge,
+  RotateCcw,
+  Loader2
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
@@ -129,9 +131,11 @@ const deviceOptions = [
   "cuda:7"
 ]
 
-export default function FineTuningPage() {
+export default function RestartTaskPage() {
   const router = useRouter()
+  const params = useParams()
   const { toast } = useToast()
+  const taskId = params.taskId as string
   
   const [selectedBaseModel, setSelectedBaseModel] = useState(predefinedModels.embedding)
   const [isCustomModel, setIsCustomModel] = useState(false)
@@ -149,9 +153,10 @@ export default function FineTuningPage() {
   const [uploadLoading, setUploadLoading] = useState(false)
 
   const [loading, setLoading] = useState(false)
+  const [pageLoading, setPageLoading] = useState(true)
   const [taskName, setTaskName] = useState("")
   const [description, setDescription] = useState("")
-  const [selectedDevices, setSelectedDevices] = useState<string[]>(["cpu"])
+  const [selectedDevices, setSelectedDevices] = useState<string[]>([])
   
   // GPU状态相关state
   const [gpuStatus, setGpuStatus] = useState<GPUStatusResponse | null>(null)
@@ -169,8 +174,8 @@ export default function FineTuningPage() {
   const [evalBatchSizeInput, setEvalBatchSizeInput] = useState("32")
   const [learningRate, setLearningRate] = useState([2e-5])
   const [learningRateInput, setLearningRateInput] = useState("2e-5")
-  const [warmupRatio, setWarmupRatio] = useState([0.0])
-  const [warmupRatioInput, setWarmupRatioInput] = useState("0.0")
+  const [warmupRatio, setWarmupRatio] = useState([0.1])
+  const [warmupRatioInput, setWarmupRatioInput] = useState("0.1")
   const [gradientAccumulation, setGradientAccumulation] = useState([1])
   const [gradientAccumulationInput, setGradientAccumulationInput] = useState("1")
   const [evalStrategy, setEvalStrategy] = useState("epoch")
@@ -182,7 +187,7 @@ export default function FineTuningPage() {
   const [logStrategy, setLogStrategy] = useState("steps")
   const [logSteps, setLogSteps] = useState([100])
   const [logStepsInput, setLogStepsInput] = useState("100")
-  const [precisionType, setPrecisionType] = useState("bf16")
+  const [precisionType, setPrecisionType] = useState("fp16")
   const [doSample, setDoSample] = useState(false)
   const [trainSampleSize, setTrainSampleSize] = useState([500])
   const [trainSampleSizeInput, setTrainSampleSizeInput] = useState("500")
@@ -450,7 +455,244 @@ export default function FineTuningPage() {
     }
   }
 
-  // 页面加载时开始GPU状态轮询
+  // 加载重启配置
+  useEffect(() => {
+    const loadRestartConfig = async () => {
+      try {
+        console.log('Loading restart config for task ID:', taskId)
+
+        const response = await fetch(`/api/proxy/api/v1/unified_training/tasks/${taskId}/restart_config`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        })
+
+        if (response.ok) {
+          const data = await response.json()
+          if (data.code === 200) {
+            const config = data.data
+            console.log('Loaded restart config:', config)
+
+            // 合并训练参数到config对象中，方便后续处理
+            const trainingParams = config.training_params || {}
+            const mergedConfig = { ...config, ...trainingParams }
+
+            // 调试信息：输出合并后的配置
+            console.log('Training params:', trainingParams)
+            console.log('Merged config:', mergedConfig)
+
+            // 回显基础配置信息
+            if (mergedConfig.suggested_task_name) {
+              setTaskName(mergedConfig.suggested_task_name)
+            } else if (mergedConfig.task_name || mergedConfig.original_task_name) {
+              setTaskName(mergedConfig.task_name || mergedConfig.original_task_name)
+            }
+            if (mergedConfig.description) {
+              setDescription(mergedConfig.description)
+            }
+
+            // 回显训练类型
+            if (mergedConfig.train_type || mergedConfig.task_type) {
+              const type = mergedConfig.train_type || mergedConfig.task_type
+              setTrainType(type)
+            }
+
+            // 回显模型配置
+            if (mergedConfig.base_model || mergedConfig.model_name_or_path) {
+              const model = mergedConfig.base_model || mergedConfig.model_name_or_path
+              setSelectedBaseModel(model)
+              // 检查是否是预定义模型
+              const isPredefined = Object.values(predefinedModels).includes(model)
+              setIsCustomModel(!isPredefined)
+            }
+
+            // 回显数据集配置
+            if (mergedConfig.dataset_path || mergedConfig.dataset_name_or_path) {
+              const dataset = mergedConfig.dataset_path || mergedConfig.dataset_name_or_path
+              setDatasetPath(dataset)
+              setIsCustomDataset(true)
+              setDatasetMode('custom')
+            }
+
+            // 回显训练参数
+            if (mergedConfig.num_train_epochs !== undefined) {
+              const epochsValue = Number(mergedConfig.num_train_epochs)
+              setEpochs([epochsValue])
+              setEpochsInput(epochsValue.toString())
+            }
+            if (mergedConfig.per_device_train_batch_size !== undefined) {
+              const batchSize = Number(mergedConfig.per_device_train_batch_size)
+              setTrainBatchSize([batchSize])
+              setTrainBatchSizeInput(batchSize.toString())
+            }
+            if (mergedConfig.per_device_eval_batch_size !== undefined) {
+              const evalBatch = Number(mergedConfig.per_device_eval_batch_size)
+              setEvalBatchSize([evalBatch])
+              setEvalBatchSizeInput(evalBatch.toString())
+            }
+            if (mergedConfig.learning_rate !== undefined) {
+              const lr = Number(mergedConfig.learning_rate)
+              setLearningRate([lr])
+              setLearningRateInput(lr.toString())
+            }
+            if (mergedConfig.warmup_ratio !== undefined) {
+              const warmup = Number(mergedConfig.warmup_ratio)
+              setWarmupRatio([warmup])
+              setWarmupRatioInput(warmup.toString())
+            }
+            if (mergedConfig.gradient_accumulation_steps !== undefined) {
+              const gradAccum = Number(mergedConfig.gradient_accumulation_steps)
+              setGradientAccumulation([gradAccum])
+              setGradientAccumulationInput(gradAccum.toString())
+            }
+
+            // 回显其他训练参数
+            // Note: weight_decay and max_seq_length parameters are available in config but not implemented in UI
+
+            // 回显评估和保存策略
+            if (mergedConfig.eval_strategy) {
+              setEvalStrategy(mergedConfig.eval_strategy)
+            }
+            if (mergedConfig.eval_steps !== undefined) {
+              const evalStepsValue = Number(mergedConfig.eval_steps)
+              setEvalSteps([evalStepsValue])
+              setEvalStepsInput(evalStepsValue.toString())
+            }
+            if (mergedConfig.save_strategy) {
+              setSaveStrategy(mergedConfig.save_strategy)
+            }
+            if (mergedConfig.save_steps !== undefined) {
+              const saveStepsValue = Number(mergedConfig.save_steps)
+              setSaveSteps([saveStepsValue])
+              setSaveStepsInput(saveStepsValue.toString())
+            }
+            if (mergedConfig.log_strategy) {
+              setLogStrategy(mergedConfig.log_strategy)
+            }
+            if (mergedConfig.log_steps !== undefined || mergedConfig.logging_steps !== undefined) {
+              const logStepsValue = Number(mergedConfig.log_steps || mergedConfig.logging_steps)
+              setLogSteps([logStepsValue])
+              setLogStepsInput(logStepsValue.toString())
+            }
+
+            // 回显输出目录
+            if (mergedConfig.output_dir) {
+              setOutputDir(mergedConfig.output_dir)
+            }
+
+            // 暂存原设备配置，稍后在GPU状态加载后检查可用性
+            if (mergedConfig.device) {
+              (window as any).originalDevices = mergedConfig.device.split(',').map((d: string) => d.trim())
+              console.log('Stored original devices for later validation:', (window as any).originalDevices)
+            }
+
+            // 回显其他配置
+            if (mergedConfig.bf16 !== undefined) {
+              setPrecisionType(mergedConfig.bf16 ? "bf16" : "fp16")
+            }
+            if (mergedConfig.lr_scheduler_type) {
+              setLrSchedulerType(mergedConfig.lr_scheduler_type)
+            }
+
+            // 回显评估累积步数配置
+            if (mergedConfig.eval_accumulation_steps !== undefined) {
+              setEnableEvalAccumulation(true)
+              setEvalAccumulationSteps([mergedConfig.eval_accumulation_steps])
+              setEvalAccumulationStepsInput(mergedConfig.eval_accumulation_steps.toString())
+            }
+
+            // 回显DataLoader配置
+            if (mergedConfig.dataloader_drop_last !== undefined) {
+              setDataloaderDropLast(mergedConfig.dataloader_drop_last)
+            }
+
+            // 回显采样配置
+            // 检查是否存在采样参数，如果存在则自动启用 do_sample
+            const trainSampleValue = mergedConfig.train_sample_size || mergedConfig.train_samp
+            const evalSampleValue = mergedConfig.eval_sample_size || mergedConfig.eval_samp
+            const testSampleValue = mergedConfig.test_sample_size || mergedConfig.test_samp
+
+            const hasSampleConfig = trainSampleValue !== undefined ||
+                                   evalSampleValue !== undefined ||
+                                   testSampleValue !== undefined
+
+            // 优先使用接口返回的 do_sample 值，如果没有但存在采样参数则自动启用
+            if (mergedConfig.do_sample !== undefined) {
+              setDoSample(mergedConfig.do_sample)
+            } else if (hasSampleConfig) {
+              setDoSample(true)
+              console.log('Auto-enabled do_sample due to presence of sample size parameters')
+            }
+
+            // 训练样本大小 - 支持多种字段名
+            if (trainSampleValue !== undefined) {
+              const trainSample = Number(trainSampleValue)
+              setTrainSampleSize([trainSample])
+              setTrainSampleSizeInput(trainSample.toString())
+              console.log('Set train sample size:', trainSample)
+            }
+
+            // 评估样本大小 - 支持多种字段名
+            if (evalSampleValue !== undefined) {
+              const evalSample = Number(evalSampleValue)
+              setEvalSampleSize([evalSample])
+              setEvalSampleSizeInput(evalSample.toString())
+              console.log('Set eval sample size:', evalSample)
+            }
+
+            // 测试样本大小 - 支持多种字段名
+            if (testSampleValue !== undefined) {
+              const testSample = Number(testSampleValue)
+              setTestSampleSize([testSample])
+              setTestSampleSizeInput(testSample.toString())
+              console.log('Set test sample size:', testSample)
+            }
+
+            // 回显HF配置
+            if (mergedConfig.use_hf_subset !== undefined) {
+              setUseHfSubset(mergedConfig.use_hf_subset)
+            }
+            if (mergedConfig.hf_subset_type || mergedConfig.HF_subset) {
+              setHfSubsetType(mergedConfig.hf_subset_type || mergedConfig.HF_subset)
+            }
+
+            toast({
+              title: "配置加载成功",
+              description: "原任务配置已成功加载，您可以进行编辑后重新开始训练",
+            })
+          } else {
+            toast({
+              variant: "destructive",
+              title: "获取配置失败",
+              description: data.msg || "获取重启配置失败",
+            })
+          }
+        } else {
+          toast({
+            variant: "destructive",
+            title: "获取配置失败",
+            description: "获取重启配置失败",
+          })
+        }
+      } catch (error) {
+        console.error('Error loading restart config:', error)
+        toast({
+          variant: "destructive",
+          title: "获取配置失败",
+          description: "获取重启配置时发生错误",
+        })
+      } finally {
+        setPageLoading(false)
+      }
+    }
+
+    if (taskId) {
+      loadRestartConfig()
+    }
+  }, [taskId])
+
+  // 启动GPU状态轮询
   useEffect(() => {
     startGpuPolling()
 
@@ -489,6 +731,48 @@ export default function FineTuningPage() {
     }
   }, [datasetMode])
 
+  // 检查原设备可用性 - 在GPU状态加载后执行
+  useEffect(() => {
+    if (gpuStatus && (window as any).originalDevices && selectedDevices.length === 0) {
+      const originalDevices = (window as any).originalDevices as string[]
+
+      // 检查所有原设备是否仍然可用
+      const areAllDevicesAvailable = originalDevices.every(device => {
+        if (device === 'cpu') {
+          return true // CPU 始终可用
+        }
+
+        // 检查 CUDA 设备
+        if (device.startsWith('cuda:')) {
+          const cudaIndex = device.replace('cuda:', '')
+          if (gpuStatus?.data?.gpu_details) {
+            const gpu = gpuStatus.data.gpu_details[cudaIndex]
+            return gpu?.status === 'free'
+          }
+          return false // 如果没有GPU状态信息，则认为不可用
+        }
+
+        return false // 其他未知设备类型
+      })
+
+      if (areAllDevicesAvailable) {
+        setSelectedDevices(originalDevices)
+        console.log('Restored original devices:', originalDevices)
+      } else {
+        // 如果原设备不可用，则不设置默认选择，让用户重新选择
+        console.log('Original devices not available, user needs to reselect:', originalDevices)
+        toast({
+          variant: "destructive",
+          title: "设备不可用",
+          description: "原训练设备已被占用或不可用，请重新选择可用设备",
+        })
+      }
+
+      // 清除临时存储的原设备信息
+      delete (window as any).originalDevices
+    }
+  }, [gpuStatus, selectedDevices.length, toast])
+
   // 处理设备选择 - 实现CPU与CUDA互斥逻辑
   const handleDeviceToggle = (device: string) => {
     setSelectedDevices(prev => {
@@ -501,11 +785,11 @@ export default function FineTuningPage() {
         // 如果设备已选中，则移除
         const remaining = prev.filter(d => d !== device)
         
-        // 确保至少有一个设备被选中
-        if (remaining.length === 0) {
-          // 如果移除后没有设备，则默认选择CPU
-          return ['cpu']
-        }
+        // 允许用户清空所有设备选择，让用户自己选择
+        // if (remaining.length === 0) {
+        //   // 不自动选择CPU，让用户自己选择
+        //   return ['cpu']
+        // }
         
         return remaining
       } else {
@@ -562,8 +846,17 @@ export default function FineTuningPage() {
     if (!outputDir.trim()) {
       toast({
         variant: "destructive",
-        title: "错误", 
+        title: "错误",
         description: "请输入输出目录",
+      })
+      return
+    }
+
+    if (selectedDevices.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "错误",
+        description: "请选择至少一个训练设备",
       })
       return
     }
@@ -600,10 +893,11 @@ export default function FineTuningPage() {
         ...(taskName.trim() && { task_name: taskName.trim() }),
         ...(description.trim() && { description: description.trim() }),
         device: selectedDevices.join(','),
-        ...(useHfSubset && !isCustomDataset && { HF_subset: hfSubsetType })
+        ...(useHfSubset && !isCustomDataset && { HF_subset: hfSubsetType }),
+        base_task_id: taskId // 标识这是重启任务
       }
       
-      console.log('Creating training task with params:', requestBody)
+      console.log('Creating restart training task with params:', requestBody)
       
       const response = await fetch('/api/proxy/api/v1/unified_training/start_training', {
         method: 'POST',
@@ -618,29 +912,39 @@ export default function FineTuningPage() {
       }
       
       const result = await response.json()
-      console.log('Training task created:', result)
-      
+      console.log('Restart training task created:', result)
+
       if (result.code === 200 || result.msg === 'success') {
         toast({
-          title: "成功",
-          description: "模型微调任务已创建，正在后台处理...",
+          title: "重启成功",
+          description: "重启训练任务已创建，正在后台处理...",
         })
         router.push('/models')
       } else {
-        throw new Error(result.msg || '创建任务失败')
+        throw new Error(result.msg || '创建重启任务失败')
       }
     } catch (error) {
-      console.error("创建微调任务失败:", error)
+      console.error("创建重启训练任务失败:", error)
       toast({
         variant: "destructive",
         title: "错误",
-        description: error instanceof Error ? error.message : "创建微调任务失败，请稍后重试",
+        description: error instanceof Error ? error.message : "创建重启训练任务失败，请稍后重试",
       })
     } finally {
       setLoading(false)
     }
   }
 
+  if (pageLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-pink-100 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-orange-600" />
+          <p className="text-gray-600">正在加载任务配置...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-pink-100">
@@ -658,29 +962,29 @@ export default function FineTuningPage() {
                 返回
               </Button>
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
-                  <Zap className="h-5 w-5 text-white" />
+                <div className="w-10 h-10 bg-gradient-to-r from-orange-500 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
+                  <RotateCcw className="h-5 w-5 text-white" />
                 </div>
                 <div>
                   <h1 className="text-xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
-                    创建模型微调任务
+                    重启训练任务
                   </h1>
-                  <p className="text-sm text-gray-500">配置训练参数，开始模型微调</p>
+                  <p className="text-sm text-gray-500">基于原任务配置编辑参数并重新训练</p>
                 </div>
               </div>
             </div>
-            
-            {/* 进度指示 */}
-            <div className="hidden md:flex items-center gap-2 text-sm text-gray-500">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                <span>配置参数</span>
-              </div>
-              <div className="w-4 h-px bg-gray-300"></div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-                <span>开始训练</span>
-              </div>
+
+            {/* 任务信息 */}
+            <div className="hidden md:flex items-center gap-4">
+              <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200">
+                原任务ID: {taskId}
+              </Badge>
+              {!pageLoading && (
+                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                  <CheckCircle className="h-3 w-3 mr-1" />
+                  配置已加载
+                </Badge>
+              )}
             </div>
           </div>
         </div>
@@ -2062,9 +2366,9 @@ export default function FineTuningPage() {
                             // 输入框失去焦点时，确保值合法
                             const numValue = parseFloat(warmupRatioInput)
                             if (isNaN(numValue) || numValue < 0 || numValue > 1) {
-                              // 如果输入无效，设置为0.0(默认值)
-                              setWarmupRatioInput("0.0")
-                              setWarmupRatio([0.0])
+                              // 如果输入无效，设置为0.1(默认值)
+                              setWarmupRatioInput("0.1")
+                              setWarmupRatio([0.1])
                             } else {
                               // 确保输入框显示正确格式
                               setWarmupRatioInput(numValue.toString())
@@ -2185,6 +2489,62 @@ export default function FineTuningPage() {
                         <span>{Math.max(32, gradientAccumulation[0] + 8)}</span>
                       </div>
                       <p className="text-xs text-slate-600 mt-2">梯度累积步数 (最小值: 1，默认: 1)</p>
+                    </div>
+                    
+                    {/* 混合精度训练区域 */}
+                    <div className="bg-gradient-to-br from-violet-50 to-purple-50 p-4 rounded-lg border border-violet-100">
+                      <Label className="text-sm font-semibold text-violet-800 flex items-center justify-between mb-3">
+                        <span>混合精度训练</span>
+                        <Badge variant="secondary" className="bg-violet-100 text-violet-700">
+                          {precisionType}
+                        </Badge>
+                      </Label>
+                      
+                      <Select value={precisionType} onValueChange={setPrecisionType}>
+                        <SelectTrigger className="h-12 bg-white/80 border-2 border-violet-200/60 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-200/50 focus:shadow-md transition-all duration-300 rounded-lg">
+                          <SelectValue placeholder="选择精度类型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="bf16">bf16</SelectItem>
+                          <SelectItem value="fp16">fp16</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-violet-600 mt-2">
+                        混合精度训练可以加速训练并减少显存占用
+                      </p>
+                    </div>
+                    
+                    {/* 学习率调度器区域 */}
+                    <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-4 rounded-lg border border-emerald-100">
+                      <Label className="text-sm font-semibold text-emerald-800 flex items-center justify-between mb-3">
+                        <span>学习率调度器</span>
+                        <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">
+                          {lrSchedulerType}
+                        </Badge>
+                      </Label>
+                      
+                      <Select value={lrSchedulerType} onValueChange={setLrSchedulerType}>
+                        <SelectTrigger className="h-12 bg-white/80 border-2 border-emerald-200/60 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-200/50 focus:shadow-md transition-all duration-300 rounded-lg">
+                          <SelectValue placeholder="选择调度器类型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cosine">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                              <span>cosine</span>
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="linear">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
+                              <span>linear</span>
+                            </div>
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-emerald-600 mt-2">
+                        控制学习率在训练过程中的衰减策略
+                      </p>
                     </div>
 
                     {/* 评估累积步数区域 */}
@@ -2325,62 +2685,6 @@ export default function FineTuningPage() {
                         </p>
                       </div>
                     </div>
-
-                    {/* 混合精度训练区域 */}
-                    <div className="bg-gradient-to-br from-violet-50 to-purple-50 p-4 rounded-lg border border-violet-100">
-                      <Label className="text-sm font-semibold text-violet-800 flex items-center justify-between mb-3">
-                        <span>混合精度训练</span>
-                        <Badge variant="secondary" className="bg-violet-100 text-violet-700">
-                          {precisionType}
-                        </Badge>
-                      </Label>
-                      
-                      <Select value={precisionType} onValueChange={setPrecisionType}>
-                        <SelectTrigger className="h-12 bg-white/80 border-2 border-violet-200/60 focus:border-violet-500 focus:bg-white focus:ring-2 focus:ring-violet-200/50 focus:shadow-md transition-all duration-300 rounded-lg">
-                          <SelectValue placeholder="选择精度类型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="bf16">bf16</SelectItem>
-                          <SelectItem value="fp16">fp16</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-violet-600 mt-2">
-                        混合精度训练可以加速训练并减少显存占用
-                      </p>
-                    </div>
-                    
-                    {/* 学习率调度器区域 */}
-                    <div className="bg-gradient-to-br from-emerald-50 to-teal-50 p-4 rounded-lg border border-emerald-100">
-                      <Label className="text-sm font-semibold text-emerald-800 flex items-center justify-between mb-3">
-                        <span>学习率调度器</span>
-                        <Badge variant="secondary" className="bg-emerald-100 text-emerald-700">
-                          {lrSchedulerType}
-                        </Badge>
-                      </Label>
-                      
-                      <Select value={lrSchedulerType} onValueChange={setLrSchedulerType}>
-                        <SelectTrigger className="h-12 bg-white/80 border-2 border-emerald-200/60 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-200/50 focus:shadow-md transition-all duration-300 rounded-lg">
-                          <SelectValue placeholder="选择调度器类型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="cosine">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                              <span>cosine</span>
-                            </div>
-                          </SelectItem>
-                          <SelectItem value="linear">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-teal-500 rounded-full"></div>
-                              <span>linear</span>
-                            </div>
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-emerald-600 mt-2">
-                        控制学习率在训练过程中的衰减策略
-                      </p>
-                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -2494,7 +2798,7 @@ export default function FineTuningPage() {
                         ) : (
                           <div className="flex items-center gap-2 text-green-600">
                             <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                            配置完成，可以开始训练
+                            配置完成，可以开始重启训练
                           </div>
                         )}
                       </div>
@@ -2508,17 +2812,17 @@ export default function FineTuningPage() {
                 <Button
                   onClick={handleSubmit}
                   disabled={loading || !trainType || !selectedBaseModel || !datasetPath.trim() || !outputDir}
-                  className="w-full h-12 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg hover:shadow-xl transition-all duration-200 text-base font-semibold text-white"
+                  className="w-full h-12 bg-gradient-to-r from-orange-600 to-pink-600 hover:from-orange-700 hover:to-pink-700 shadow-lg hover:shadow-xl transition-all duration-200 text-base font-semibold text-white"
                 >
                   {loading ? (
                     <div className="flex items-center gap-2">
                       <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                      创建中...
+                      重启中...
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <Zap className="h-4 w-4" />
-                      开始训练
+                      <RotateCcw className="h-4 w-4" />
+                      开始重启训练
                     </div>
                   )}
                 </Button>

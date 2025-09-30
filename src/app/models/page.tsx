@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
@@ -9,6 +9,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Table,
   TableBody,
@@ -25,13 +31,13 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination"
-import { 
-  ArrowLeft, 
-  Plus, 
-  Settings, 
-  Play, 
-  Pause, 
-  CheckCircle, 
+import {
+  ArrowLeft,
+  Plus,
+  Settings,
+  Play,
+  Pause,
+  CheckCircle,
   AlertCircle,
   FileText,
   Zap,
@@ -40,13 +46,21 @@ import {
   Database,
   TrendingUp,
   Calendar,
+  Clock,
   Square,
   Rocket,
   Server,
   Search,
   StopCircle,
   List,
-  BarChart
+  BarChart,
+  BarChart3,
+  Copy,
+  Trash2,
+  MoreHorizontal,
+  Info,
+  RotateCcw,
+  AlertTriangle
 } from "lucide-react"
 
 interface ModelTrainingTask {
@@ -64,6 +78,241 @@ interface ModelTrainingTask {
   loss?: number
 }
 
+// 多数据源曲线图组件
+const MultiDataSourceCharts = ({ lossData }: { lossData: any }) => {
+  // 获取loss历史数据
+  let lossHistory = null;
+  if (lossData.data && lossData.data.loss_data) {
+    lossHistory = lossData.data.loss_data;
+  } else if (Array.isArray(lossData.data)) {
+    lossHistory = lossData.data;
+  } else if (Array.isArray(lossData)) {
+    lossHistory = lossData;
+  }
+
+  if (!lossHistory || !Array.isArray(lossHistory) || lossHistory.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <TrendingUp className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+        <p className="text-gray-500 text-sm">暂无训练数据</p>
+      </div>
+    );
+  }
+
+  // 获取data_sources信息 - 从loss_data中的evaluation_metadata收集
+  let dataSources = [];
+  const dataSourcesMap = new Map();
+
+  // 遍历所有loss_data记录，收集data_sources信息
+  lossHistory.forEach((item: any) => {
+    if (item.evaluation_metadata && item.evaluation_metadata.data_sources) {
+      Object.values(item.evaluation_metadata.data_sources).forEach((source: any) => {
+        if (!dataSourcesMap.has(source.source_id)) {
+          dataSourcesMap.set(source.source_id, {
+            source_id: source.source_id,
+            name: source.name || `数据源${source.source_id}`
+          });
+        }
+      });
+    }
+  });
+
+  dataSources = Array.from(dataSourcesMap.values());
+
+  // 如果没有data_sources，自动检测source_id
+  if (dataSources.length === 0) {
+    const detectedSources = new Set();
+    lossHistory.forEach((item: any) => {
+      Object.keys(item).forEach(key => {
+        if (key.startsWith('eval_') && key.includes('_')) {
+          const parts = key.split('_');
+          if (parts.length >= 3) {
+            const sourceId = parts[1];
+            detectedSources.add(sourceId);
+          }
+        }
+      });
+    });
+
+    dataSources = Array.from(detectedSources).map((sourceId: any) => ({
+      source_id: sourceId,
+      name: `数据源${sourceId}`
+    }));
+  }
+
+  if (dataSources.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <TrendingUp className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+        <p className="text-gray-500 text-sm">未检测到评估数据源</p>
+      </div>
+    );
+  }
+
+  // 为每个data_source渲染评估曲线
+  return (
+    <div className="space-y-8">
+      {dataSources.map((dataSource: any, index: number) => {
+        const sourceId = dataSource.source_id;
+        const sourceName = dataSource.name || `数据源${sourceId}`;
+
+        // 筛选该source_id的指标 - 包含所有相关评估指标
+        const allowedMetrics = ['loss', 'pearson', 'spearman', 'pearson_cosine', 'spearman_cosine', 'eval_sequential_score'];
+        const sourceMetrics = ['epoch'];
+
+        lossHistory.forEach((item: any) => {
+          Object.keys(item).forEach(key => {
+            // 检查是否是该source_id的指标
+            if (key.startsWith(`eval_${sourceId}_`)) {
+              // 提取指标名称，例如 eval_1_loss -> loss, eval_1_eval_sequential_score -> eval_sequential_score
+              const metricName = key.replace(`eval_${sourceId}_`, '');
+              if (allowedMetrics.includes(metricName) && !sourceMetrics.includes(key)) {
+                sourceMetrics.push(key);
+              }
+            }
+            // 也检查直接的eval_sequential_score（可能没有source_id前缀）
+            else if (key === 'eval_sequential_score' && allowedMetrics.includes('eval_sequential_score') && !sourceMetrics.includes(key)) {
+              sourceMetrics.push(key);
+            }
+          });
+        });
+
+        if (sourceMetrics.length <= 1) {
+          return null;
+        }
+
+        return (
+          <div key={sourceId} className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+            <h5 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+              {sourceName} 评估指标
+            </h5>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {sourceMetrics.filter(metric => metric !== 'epoch').map(metric => {
+                // 过滤有效数据
+                const metricData = lossHistory.filter((item: any) =>
+                  item[metric] !== undefined && item[metric] !== null && !isNaN(item[metric])
+                );
+
+                if (metricData.length === 0) return null;
+
+                // 计算数值范围
+                const values = metricData.map((item: any) => Number(item[metric]));
+                const maxValue = Math.max(...values);
+                const minValue = Math.min(...values);
+                const valueRange = maxValue - minValue;
+                const padding = valueRange === 0 ? Math.abs(maxValue) * 0.1 + 0.1 : valueRange * 0.15;
+
+                // 获取step范围
+                const steps = metricData.map((item: any) => item.step || item.epoch || 0);
+                const maxStep = Math.max(...steps);
+                const minStep = Math.min(...steps);
+                const stepRange = maxStep - minStep || 1;
+
+                const chartWidth = 400;
+                const chartHeight = 200;
+                const chartPadding = 50;
+
+                const xScale = (chartWidth - 2 * chartPadding) / stepRange;
+                const yScale = (chartHeight - 2 * chartPadding) / (valueRange + 2 * padding);
+
+                // 生成SVG路径
+                const pathData = metricData.map((item: any, idx: number) => {
+                  const x = chartPadding + (steps[idx] - minStep) * xScale;
+                  const y = chartHeight - chartPadding - ((values[idx] - minValue + padding) * yScale);
+                  return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`;
+                }).join(' ');
+
+                // 指标显示名称 - 支持所有评估指标
+                const getDisplayName = (m: string) => {
+                  if (m.includes('_loss')) return 'Loss';
+                  if (m.includes('_pearson_cosine')) return 'Pearson Cosine';
+                  if (m.includes('_spearman_cosine')) return 'Spearman Cosine';
+                  if (m.includes('_pearson') && !m.includes('_cosine')) return 'Pearson';
+                  if (m.includes('_spearman') && !m.includes('_cosine')) return 'Spearman';
+                  if (m.includes('_eval_sequential_score') || m === 'eval_sequential_score') return 'Sequential Score';
+                  return m.replace(`eval_${sourceId}_`, '');
+                };
+
+                const displayName = getDisplayName(metric);
+                const color = metric.includes('_loss') ? '#ef4444' :
+                             metric.includes('_pearson_cosine') ? '#10b981' :
+                             metric.includes('_spearman_cosine') ? '#ec4899' :
+                             metric.includes('_pearson') ? '#059669' :
+                             metric.includes('_spearman') ? '#be185d' :
+                             (metric.includes('_eval_sequential_score') || metric === 'eval_sequential_score') ? '#8b5cf6' : '#6b7280';
+
+                return (
+                  <div key={metric} className="bg-gray-50 rounded-lg p-4">
+                    <h6 className="text-sm font-medium text-gray-700 mb-3">{displayName}</h6>
+                    <div className="w-full overflow-x-auto">
+                      <svg width={chartWidth} height={chartHeight} className="bg-white rounded border">
+                        {/* Y轴网格线和标签 */}
+                        {[0, 1, 2, 3, 4].map(i => {
+                          const y = chartPadding + (i * (chartHeight - 2 * chartPadding) / 4);
+                          const value = maxValue + padding - (i * (valueRange + 2 * padding) / 4);
+                          return (
+                            <g key={`y-${i}`}>
+                              <line x1={chartPadding} y1={y} x2={chartWidth - chartPadding} y2={y}
+                                    stroke="#e5e7eb" strokeWidth="1" />
+                              <text x={chartPadding - 5} y={y + 3} fontSize="10" fill="#9ca3af" textAnchor="end">
+                                {value.toFixed(3)}
+                              </text>
+                            </g>
+                          );
+                        })}
+
+                        {/* X轴网格线和step标签 */}
+                        {(() => {
+                          const stepCount = Math.min(6, steps.length); // 最多显示6个step标签
+                          const stepInterval = stepRange / (stepCount - 1);
+                          return Array.from({ length: stepCount }, (_, i) => {
+                            const stepValue = Math.round(minStep + i * stepInterval);
+                            const x = chartPadding + (stepValue - minStep) * xScale;
+                            return (
+                              <g key={`x-${i}`}>
+                                <line x1={x} y1={chartPadding} x2={x} y2={chartHeight - chartPadding}
+                                      stroke="#f3f4f6" strokeWidth="1" />
+                                <text x={x} y={chartHeight - chartPadding + 15} fontSize="10" fill="#9ca3af" textAnchor="middle">
+                                  {stepValue}
+                                </text>
+                              </g>
+                            );
+                          });
+                        })()}
+
+                        {/* 曲线 */}
+                        <path d={pathData} fill="none" stroke={color} strokeWidth="2" />
+
+                        {/* 数据点 */}
+                        {metricData.map((item: any, idx: number) => {
+                          const x = chartPadding + (steps[idx] - minStep) * xScale;
+                          const y = chartHeight - chartPadding - ((values[idx] - minValue + padding) * yScale);
+                          return <circle key={idx} cx={x} cy={y} r="3" fill={color} />;
+                        })}
+
+                        {/* 坐标轴标签 */}
+                        <text x={chartWidth / 2} y={chartHeight - 10} fontSize="12" fill="#374151" textAnchor="middle">Step</text>
+                        <text x={20} y={chartHeight / 2} fontSize="12" fill="#374151" textAnchor="middle"
+                              transform={`rotate(-90, 20, ${chartHeight / 2})`}>{displayName}</text>
+                      </svg>
+                    </div>
+                    <div className="flex justify-between text-xs text-gray-500 mt-2">
+                      <span>{metricData.length} 个数据点</span>
+                      <span>范围: {minValue.toFixed(3)} - {maxValue.toFixed(3)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // 接口返回的训练任务数据接口
 interface ApiTrainingTask {
   [key: string]: any
@@ -78,10 +327,15 @@ export default function ModelsPage() {
   const { toast } = useToast()
   const [models, setModels] = useState<ApiTrainingTask[]>([])
   const [allModels, setAllModels] = useState<ApiTrainingTask[]>([]) // 存储所有数据用于分页
+  const [filteredModels, setFilteredModels] = useState<ApiTrainingTask[]>([]) // 筛选后的数据
   const [currentTrainingPage, setCurrentTrainingPage] = useState(1)
   const currentTrainingPageRef = useRef(1)
   const [totalTrainingPages, setTotalTrainingPages] = useState(1)
   const [trainingPageSize] = useState(10)
+  // 筛选相关状态
+  const [taskNameFilter, setTaskNameFilter] = useState('') // 任务名称/ID筛选
+  const [taskStatusFilter, setTaskStatusFilter] = useState('all') // 状态筛选
+  const [taskTypeFilter, setTaskTypeFilter] = useState('all') // 训练类型筛选
   const [dockerServers, setDockerServers] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [dockerLoading, setDockerLoading] = useState(false)
@@ -107,8 +361,12 @@ export default function ModelsPage() {
   const [showDeleteDockerDialog, setShowDeleteDockerDialog] = useState(false)
   const [selectedDockerServer, setSelectedDockerServer] = useState<any>(null)
   const [showDeleteModelDialog, setShowDeleteModelDialog] = useState(false)
-  const [selectedModelForDelete, setSelectedModelForDelete] = useState<any>(null)
   const [showDeleteTaskDialog, setShowDeleteTaskDialog] = useState(false)
+  const [taskToDelete, setTaskToDelete] = useState<string | null>(null)
+  const [showTaskDetailDialog, setShowTaskDetailDialog] = useState(false)
+  const [taskDetailData, setTaskDetailData] = useState<any>(null)
+  const [taskDetailLoading, setTaskDetailLoading] = useState(false)
+  const [selectedModelForDelete, setSelectedModelForDelete] = useState<any>(null)
   const [selectedTaskForDelete, setSelectedTaskForDelete] = useState<any>(null)
   const [showStopTaskDialog, setShowStopTaskDialog] = useState(false)
   const [selectedTaskForStop, setSelectedTaskForStop] = useState<any>(null)
@@ -153,6 +411,10 @@ export default function ModelsPage() {
   const [evalResults, setEvalResults] = useState<any>(null)
   const [resultsLoading, setResultsLoading] = useState(false)
 
+  // 失败原因弹窗状态
+  const [showErrorDialog, setShowErrorDialog] = useState(false)
+  const [selectedTaskForError, setSelectedTaskForError] = useState<any>(null)
+
   // 过滤已完成的任务用于部署页面
   const completedModels = models.filter(model => 
     model.status?.toLowerCase() === 'succeeded' || 
@@ -173,23 +435,78 @@ export default function ModelsPage() {
   // 根据模型类型过滤部署（服务器端分页已处理，这里只做客户端二次过滤）
   const filteredDeployments = deployments
 
-  // 更新训练任务分页数据
-  const updateTrainingPageData = (allTasks: ApiTrainingTask[], page: number) => {
-    const totalPages = Math.max(1, Math.ceil(allTasks.length / trainingPageSize))
-    const startIndex = (page - 1) * trainingPageSize
-    const endIndex = startIndex + trainingPageSize
-    const pageData = allTasks.slice(startIndex, endIndex)
-    
-    setModels(pageData)
-    setTotalTrainingPages(totalPages)
+  // 使用 useMemo 缓存筛选后的数据，只在筛选条件或原始数据变化时重新计算
+  const filteredTasksData = useMemo(() => {
+    return allModels.filter(task => {
+      // 任务名称/ID筛选
+      const nameMatch = taskNameFilter === '' ||
+        (task.task_name && task.task_name.toLowerCase().includes(taskNameFilter.toLowerCase())) ||
+        (task.task_id && task.task_id.toLowerCase().includes(taskNameFilter.toLowerCase())) ||
+        (task.id && task.id.toLowerCase().includes(taskNameFilter.toLowerCase())) ||
+        (task.model_name && task.model_name.toLowerCase().includes(taskNameFilter.toLowerCase()))
+
+      // 状态筛选
+      const statusMatch = taskStatusFilter === 'all' ||
+        (task.status && (
+          task.status.toLowerCase() === taskStatusFilter.toLowerCase() ||
+          // 处理"成功"状态的多种表示方式
+          (taskStatusFilter === 'succeeded' && (
+            task.status.toLowerCase() === 'completed' ||
+            task.status.toLowerCase() === 'succeeded' ||
+            task.status.toLowerCase() === 'success'
+          ))
+        ))
+
+      // 训练类型筛选
+      const typeMatch = taskTypeFilter === 'all' ||
+        (task.train_type && task.train_type.toLowerCase() === taskTypeFilter.toLowerCase()) ||
+        (task.task_type && task.task_type.toLowerCase() === taskTypeFilter.toLowerCase())
+
+      return nameMatch && statusMatch && typeMatch
+    })
+  }, [allModels, taskNameFilter, taskStatusFilter, taskTypeFilter])
+
+  // 简化的筛选函数，直接返回缓存的结果（保持兼容性）
+  const filterTasks = () => {
+    return filteredTasksData
   }
+
+  // 使用 useMemo 缓存分页数据
+  const paginatedTasksData = useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredTasksData.length / trainingPageSize))
+
+    // 如果当前页码超出了总页数，使用第一页
+    let targetPage = currentTrainingPage
+    if (currentTrainingPage > totalPages && totalPages > 0) {
+      targetPage = 1
+    }
+
+    const startIndex = (targetPage - 1) * trainingPageSize
+    const endIndex = startIndex + trainingPageSize
+    const pageData = filteredTasksData.slice(startIndex, endIndex)
+
+    return {
+      data: pageData,
+      totalPages,
+      targetPage
+    }
+  }, [filteredTasksData, currentTrainingPage, trainingPageSize])
+
+  // 同步分页状态
+  useEffect(() => {
+    if (paginatedTasksData.targetPage !== currentTrainingPage) {
+      setCurrentTrainingPage(paginatedTasksData.targetPage)
+      currentTrainingPageRef.current = paginatedTasksData.targetPage
+    }
+    setModels(paginatedTasksData.data)
+    setTotalTrainingPages(paginatedTasksData.totalPages)
+    setFilteredModels(filteredTasksData)
+  }, [paginatedTasksData, filteredTasksData])
 
   // 处理训练任务分页变化
   const handleTrainingPageChange = (page: number) => {
     setCurrentTrainingPage(page)
     currentTrainingPageRef.current = page
-    // 直接调用API获取新页面的数据
-    loadTrainingTasks(false)
   }
 
   // 获取训练任务列表  
@@ -222,8 +539,6 @@ export default function ModelsPage() {
         })
         // 保存所有数据用于分页
         setAllModels(sortedTasks)
-        // 计算分页数据
-        updateTrainingPageData(sortedTasks, currentTrainingPageRef.current)
       } else if (data.data?.tasks) {
         const tasks = data.data.tasks
         // 按创建时间倒序排序（最新的在前面）
@@ -233,7 +548,6 @@ export default function ModelsPage() {
           return new Date(timeB).getTime() - new Date(timeA).getTime()
         })
         setAllModels(sortedTasks)
-        updateTrainingPageData(sortedTasks, currentTrainingPageRef.current)
       } else if (Array.isArray(data)) {
         // 按创建时间倒序排序（最新的在前面）
         const sortedTasks = data.sort((a: any, b: any) => {
@@ -242,7 +556,6 @@ export default function ModelsPage() {
           return new Date(timeB).getTime() - new Date(timeA).getTime()
         })
         setAllModels(sortedTasks)
-        updateTrainingPageData(sortedTasks, currentTrainingPageRef.current)
       } else {
         console.error('Unexpected data format:', data)
         if (isInitialLoad) {
@@ -480,6 +793,12 @@ export default function ModelsPage() {
       }
     }
   }, [activeTab])
+
+  // 监听筛选条件变化，重置到第一页
+  useEffect(() => {
+    setCurrentTrainingPage(1)
+    currentTrainingPageRef.current = 1
+  }, [taskNameFilter, taskStatusFilter, taskTypeFilter])
 
   // 监听过滤器参数变化，重新加载数据
 
@@ -745,7 +1064,7 @@ export default function ModelsPage() {
   // 获取loss数据
   const fetchLossData = async (taskId: string) => {
     try {
-      const response = await fetch(`/api/proxy/api/v1/unified_training/tasks/${taskId}/loss_data`, {
+      const response = await fetch(`/api/proxy/api/v1/unified_training/training_logs?task_id=${taskId}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -802,6 +1121,49 @@ export default function ModelsPage() {
       console.error('Error fetching task status:', error)
     }
     return null
+  }
+
+  // 复制模型地址到剪贴板
+  const copyModelAddress = async (address: string) => {
+    if (!address || address === '未设置') {
+      toast({
+        title: "复制失败",
+        description: "模型地址为空",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(address)
+        toast({
+          title: "复制成功",
+          description: "模型地址已复制到剪贴板",
+        })
+      } else {
+        // 降级方案
+        const textArea = document.createElement('textarea')
+        textArea.value = address
+        textArea.style.position = 'fixed'
+        textArea.style.opacity = '0'
+        document.body.appendChild(textArea)
+        textArea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textArea)
+        toast({
+          title: "复制成功",
+          description: "模型地址已复制到剪贴板",
+        })
+      }
+    } catch (error) {
+      console.error('Failed to copy:', error)
+      toast({
+        title: "复制失败",
+        description: "无法复制到剪贴板",
+        variant: "destructive"
+      })
+    }
   }
 
   // 开始轮询loss数据和任务状态
@@ -882,28 +1244,17 @@ export default function ModelsPage() {
     setResultsLoading(true)
     setLossData(null)
     setEvalResults(null)
-    
+
     try {
-      // 查找当前任务的状态
-      const currentTask = models.find(model => model.task_id === taskId)
-      const isTaskRunning = currentTask && currentTask.status?.toLowerCase() === 'running'
-      const isTaskCompleted = currentTask && 
-        (currentTask.status?.toLowerCase() === 'succeeded' || 
-         currentTask.status?.toLowerCase() === 'completed')
-      
-      // 立即获取loss数据
-      await fetchLossData(taskId)
-      
-      // 如果任务正在运行，开始轮询loss数据
-      if (isTaskRunning) {
-        startLossPolling(taskId)
-      }
-      
-      // 如果任务已完成，获取eval结果
-      if (isTaskCompleted) {
-        await fetchEvalResults(taskId)
-      }
-      
+      // 立即获取训练结果数据和评估结果
+      await Promise.all([
+        fetchTrainingLogs(taskId),
+        fetchResultsEvalData(taskId)
+      ])
+
+      // 开始轮询训练结果
+      startResultsPolling(taskId)
+
     } catch (error) {
       console.error('Error initializing training results:', error)
       toast({
@@ -914,6 +1265,81 @@ export default function ModelsPage() {
     } finally {
       setResultsLoading(false)
     }
+  }
+
+  // 获取训练日志数据（专门为结果弹窗）
+  const fetchTrainingLogs = async (taskId: string) => {
+    try {
+      const response = await fetch(`/api/proxy/api/v1/unified_training/training_logs?task_id=${taskId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setLossData(data)
+        console.log('Training logs fetched:', data)
+      } else {
+        console.error('Failed to fetch training logs:', response.statusText)
+      }
+    } catch (error) {
+      console.error('Error fetching training logs:', error)
+    }
+  }
+
+  // 获取评估结果数据
+  const fetchResultsEvalData = async (taskId: string) => {
+    try {
+      const response = await fetch(`/api/proxy/api/v1/unified_training/tasks/${taskId}/eval_results`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setEvalResults(data)
+        console.log('Eval results fetched:', data)
+      } else {
+        console.error('Failed to fetch eval results:', response.statusText)
+      }
+    } catch (error) {
+      console.error('Error fetching eval results:', error)
+    }
+  }
+
+  // 开始轮询训练结果数据
+  const startResultsPolling = (taskId: string) => {
+    // 清除之前的轮询
+    if (lossPollingIntervalRef.current) {
+      clearInterval(lossPollingIntervalRef.current)
+    }
+
+    console.log('Starting results polling for task:', taskId)
+
+    // 每3秒轮询一次训练日志（eval_results 不轮询）
+    lossPollingIntervalRef.current = setInterval(async () => {
+      console.log('Polling training logs for task:', taskId)
+      await fetchTrainingLogs(taskId)
+    }, 3000)
+  }
+
+  // 停止结果轮询
+  const stopResultsPolling = () => {
+    if (lossPollingIntervalRef.current) {
+      console.log('Stopping results polling')
+      clearInterval(lossPollingIntervalRef.current)
+      lossPollingIntervalRef.current = null
+    }
+  }
+
+  // 查看失败原因
+  const handleViewError = (task: any) => {
+    setSelectedTaskForError(task)
+    setShowErrorDialog(true)
   }
 
   // 打开删除训练任务确认对话框
@@ -1347,6 +1773,113 @@ export default function ModelsPage() {
     }
   }
 
+  // 查看任务详情
+  const handleViewTaskDetail = async (taskId: string) => {
+    setTaskDetailLoading(true)
+    setShowTaskDetailDialog(true)
+    setTaskDetailData(null)
+
+    try {
+      console.log('Fetching task detail for ID:', taskId)
+
+      const response = await fetch(`/api/proxy/api/v1/unified_training/tasks/${taskId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.code === 200) {
+          setTaskDetailData(data.data)
+        } else {
+          toast({
+            variant: "destructive",
+            title: "获取失败",
+            description: data.msg || "获取任务详情失败",
+          })
+        }
+      } else {
+        toast({
+          variant: "destructive",
+          title: "获取失败",
+          description: "获取任务详情失败",
+        })
+      }
+    } catch (error) {
+      console.error('Error fetching task detail:', error)
+      toast({
+        variant: "destructive",
+        title: "获取失败",
+        description: "获取任务详情时发生错误",
+      })
+    } finally {
+      setTaskDetailLoading(false)
+    }
+  }
+
+  // 删除训练任务
+  const handleDeleteTask = (taskId: string) => {
+    setTaskToDelete(taskId)
+    setShowDeleteTaskDialog(true)
+  }
+
+  // 确认删除训练任务
+  const handleConfirmDeleteTask = async () => {
+    if (!taskToDelete) return
+
+    try {
+      console.log('Deleting training task with ID:', taskToDelete)
+
+      const response = await fetch(`/api/proxy/api/v1/unified_training/tasks/${taskToDelete}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.code === 200) {
+          // 关闭对话框并重新加载任务列表
+          setShowDeleteTaskDialog(false)
+          setTaskToDelete(null)
+          loadTrainingTasks(false)
+          toast({
+            title: "删除成功",
+            description: "训练任务已删除",
+          })
+        } else {
+          toast({
+            variant: "destructive",
+            title: "删除失败",
+            description: data.msg,
+          })
+        }
+      } else {
+        toast({
+          variant: "destructive",
+          title: "删除失败",
+          description: "删除训练任务失败",
+        })
+      }
+    } catch (error) {
+      console.error('Error deleting training task:', error)
+      toast({
+        variant: "destructive",
+        title: "删除失败",
+        description: "删除训练任务时发生错误",
+      })
+    }
+  }
+
+  // 重启任务
+  const handleRestartTask = (taskId: string) => {
+    // 跳转到新的重启任务页面
+    router.push(`/models/restart/${taskId}`)
+  }
+
   // 添加模型
   const handleAddModel = async () => {
     if (!addModelFormData.config_name.trim() || 
@@ -1608,6 +2141,75 @@ export default function ModelsPage() {
                   </div>
                 </div>
 
+                {/* 筛选区域 - 固定在表格顶部 */}
+                <div className="px-6 py-4 border-b border-gray-200/50 bg-gray-50/30 shrink-0">
+                  <div className="flex flex-wrap gap-4 items-center">
+                    <div className="flex items-center gap-2">
+                      <Search className="h-4 w-4 text-gray-500" />
+                      <Input
+                        placeholder="搜索任务名称或ID..."
+                        value={taskNameFilter}
+                        onChange={(e) => setTaskNameFilter(e.target.value)}
+                        className="w-64 h-9 text-sm bg-white"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium text-gray-700">状态:</Label>
+                      <Select value={taskStatusFilter} onValueChange={setTaskStatusFilter}>
+                        <SelectTrigger className="w-32 h-9 text-sm bg-white">
+                          <SelectValue placeholder="全部状态" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">全部状态</SelectItem>
+                          <SelectItem value="pending">等待中</SelectItem>
+                          <SelectItem value="running">运行中</SelectItem>
+                          <SelectItem value="succeeded">成功</SelectItem>
+                          <SelectItem value="failed">失败</SelectItem>
+                          <SelectItem value="stopped">已停止</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm font-medium text-gray-700">类型:</Label>
+                      <Select value={taskTypeFilter} onValueChange={setTaskTypeFilter}>
+                        <SelectTrigger className="w-32 h-9 text-sm bg-white">
+                          <SelectValue placeholder="全部类型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">全部类型</SelectItem>
+                          <SelectItem value="embedding">embedding</SelectItem>
+                          <SelectItem value="reranker">reranker</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {(taskNameFilter || taskStatusFilter !== 'all' || taskTypeFilter !== 'all') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setTaskNameFilter('')
+                          setTaskStatusFilter('all')
+                          setTaskTypeFilter('all')
+                        }}
+                        className="h-9 text-sm text-gray-600 hover:text-gray-800"
+                      >
+                        清除筛选
+                      </Button>
+                    )}
+
+                    <div className="flex items-center gap-2 text-sm text-gray-600 ml-auto">
+                      <span>
+                        显示 {filteredTasksData.length} 个任务
+                        {filteredTasksData.length !== allModels.length && (
+                          <span className="text-gray-500 ml-1">/ 共 {allModels.length} 个</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
 
                 {loading ? (
                   <div className="flex items-center justify-center flex-1">
@@ -1638,8 +2240,9 @@ export default function ModelsPage() {
                           <TableHead className="text-gray-700 font-semibold min-w-[80px]">状态</TableHead>
                           <TableHead className="text-gray-700 font-semibold min-w-[100px]">进度</TableHead>
                           <TableHead className="text-gray-700 font-semibold min-w-[150px]">基础模型</TableHead>
-                          <TableHead className="text-gray-700 font-semibold min-w-[150px] max-w-[180px]">失败原因</TableHead>
                           <TableHead className="text-gray-700 font-semibold min-w-[160px]">创建时间</TableHead>
+                          <TableHead className="text-gray-700 font-semibold min-w-[120px]">训练时间</TableHead>
+                          <TableHead className="text-gray-700 font-semibold min-w-[160px]">（预估）完成时间</TableHead>
                           <TableHead className="text-gray-700 font-semibold min-w-[150px] text-center">操作</TableHead>
                         </TableRow>
                       </thead>
@@ -1716,20 +2319,6 @@ export default function ModelsPage() {
                           </code>
                         </TableCell>
 
-                        <TableCell>
-                          {model.status?.toLowerCase() === 'failed' && model.error_message ? (
-                            <div className="max-w-sm">
-                              <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md p-2">
-                                <div className="flex items-start gap-1">
-                                  <AlertCircle className="h-3 w-3 flex-shrink-0 mt-0.5" />
-                                  <span className="break-words leading-relaxed">{model.error_message}</span>
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-400">-</span>
-                          )}
-                        </TableCell>
 
                         <TableCell className="text-gray-600">
                           <div className="flex items-center gap-1">
@@ -1742,64 +2331,117 @@ export default function ModelsPage() {
                           </div>
                         </TableCell>
 
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1 whitespace-nowrap">
-                          <Button
-                                  size="sm"
+                        <TableCell className="text-gray-600">
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            <span className="text-sm">
+                              {model.duration_formatted || '-'}
+                            </span>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="text-gray-600">
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            <span className="text-sm">
+                              {(() => {
+                                // 如果任务已完成，显示完成时间
+                                if (model.status?.toLowerCase() === 'succeeded' ||
+                                    model.status?.toLowerCase() === 'completed' ||
+                                    model.status?.toLowerCase() === 'failed') {
+                                  return model.completed_at ? formatDate(model.completed_at) : '-';
+                                }
+                                // 否则显示预计完成时间
+                                return model.estimated_completion_time ? formatDate(model.estimated_completion_time) : '-';
+                              })()}
+                            </span>
+                          </div>
+                        </TableCell>
+
+                        <TableCell className="text-center">
+                          <div className="flex justify-center">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
                                   variant="ghost"
-                                  className="h-8 px-3 hover:bg-green-100 hover:text-green-600 whitespace-nowrap"
-                                  title="查看训练日志"
+                                  className="h-8 w-8 p-0 hover:bg-gray-100 focus:outline-none focus:ring-0"
+                                  title="更多操作"
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-40 bg-white border border-gray-200 shadow-lg">
+                                <DropdownMenuItem
+                                  onClick={() => handleViewTaskDetail(model.task_id)}
+                                  className="flex items-center gap-2 hover:bg-blue-50 hover:text-blue-600"
+                                >
+                                  <Info className="h-4 w-4" />
+                                  任务详情
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleRestartTask(model.task_id)}
+                                  className="flex items-center gap-2 hover:bg-orange-50 hover:text-orange-600"
+                                >
+                                  <RotateCcw className="h-4 w-4" />
+                                  重启任务
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
                                   onClick={() => handleViewLogs(model.task_id)}
+                                  className="flex items-center gap-2 hover:bg-green-50 hover:text-green-600"
                                 >
-                                  <FileText className="h-4 w-4 mr-1" />日志
-                                </Button>
-                            {model.status?.toLowerCase() === 'running' && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 px-3 hover:bg-blue-100 hover:text-blue-600 whitespace-nowrap"
-                                  title="查看数据集"
+                                  <FileText className="h-4 w-4" />
+                                  查看日志
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
                                   onClick={() => handleViewDataset(model.task_id)}
+                                  className="flex items-center gap-2 hover:bg-blue-50 hover:text-blue-600"
                                 >
-                                  <Database className="h-4 w-4 mr-1" />数据集
-                                </Button>
-                               
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 px-3 hover:bg-red-100 hover:text-red-600 whitespace-nowrap"
-                                  title="停止训练"
-                                  onClick={() => handleStopTraining(model.task_id)}
+                                  <Database className="h-4 w-4" />
+                                  查看数据集
+                                </DropdownMenuItem>
+                                {(model.status?.toLowerCase() === 'running' || model.status?.toLowerCase() === 'pending') && (
+                                  <DropdownMenuItem
+                                    onClick={() => handleStopTraining(model.task_id)}
+                                    className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600"
+                                  >
+                                    <StopCircle className="h-4 w-4" />
+                                    停止训练
+                                  </DropdownMenuItem>
+                                )}
+                                {model.status?.toLowerCase() === 'failed' && model.error_message && (
+                                  <DropdownMenuItem
+                                    onClick={() => handleViewError(model)}
+                                    className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600"
+                                  >
+                                    <AlertTriangle className="h-4 w-4" />
+                                    查看失败原因
+                                  </DropdownMenuItem>
+                                )}
+                                  <DropdownMenuItem
+                                    onClick={() => handleViewResults(model.task_id)}
+                                    className="flex items-center gap-2 hover:bg-orange-50 hover:text-orange-600"
+                                  >
+                                    <BarChart className="h-4 w-4" />
+                                    查看结果
+                                  </DropdownMenuItem>
+                                {(model.status?.toLowerCase() === 'succeeded' || model.status?.toLowerCase() === 'completed') && (
+                                  <DropdownMenuItem
+                                    onClick={() => handleDeployTrainedModel(model)}
+                                    className="flex items-center gap-2 hover:bg-purple-50 hover:text-purple-600"
+                                  >
+                                    <Rocket className="h-4 w-4" />
+                                    部署模型
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuItem
+                                  onClick={() => handleDeleteTask(model.task_id)}
+                                  className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600"
                                 >
-                                  <StopCircle className="h-4 w-4 mr-1" />停止
-                                </Button>
-                              </>
-                            )}
-                            {(model.status?.toLowerCase() === 'running' || 
-                              model.status?.toLowerCase() === 'succeeded' || 
-                              model.status?.toLowerCase() === 'completed') && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 px-3 hover:bg-orange-100 hover:text-orange-600 whitespace-nowrap"
-                                title="查看结果"
-                                onClick={() => handleViewResults(model.task_id)}
-                              >
-                                <BarChart className="h-4 w-4 mr-1" />结果
-                              </Button>
-                            )}
-                            {(model.status?.toLowerCase() === 'succeeded' || model.status?.toLowerCase() === 'completed') && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 px-3 hover:bg-purple-100 hover:text-purple-600 whitespace-nowrap"
-                                title="部署模型"
-                                onClick={() => handleDeployTrainedModel(model)}
-                              >
-                                <Rocket className="h-4 w-4 mr-1" />部署
-                              </Button>
-                            )}
+                                  <Trash2 className="h-4 w-4" />
+                                  删除任务
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </TableCell>
                         </TableRow>
@@ -1817,12 +2459,22 @@ export default function ModelsPage() {
                         <div className="flex items-center gap-2">
                           <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
                           <span>第 {currentTrainingPage} 页，共 {totalTrainingPages} 页</span>
+                          {filteredTasksData.length > 0 && (
+                            <span className="text-gray-500 text-xs">
+                              (显示第 {((currentTrainingPage - 1) * trainingPageSize) + 1}-{Math.min(currentTrainingPage * trainingPageSize, filteredTasksData.length)} 条)
+                            </span>
+                          )}
                         </div>
                         {allModels.length > 0 && (
                           <div className="flex items-center gap-1 text-gray-500">
                             <span>共</span>
-                            <span className="font-medium text-purple-600">{allModels.length}</span>
+                            <span className="font-medium text-purple-600">{filteredTasksData.length}</span>
                             <span>条记录</span>
+                            {filteredTasksData.length !== allModels.length && (
+                              <span className="text-gray-500 text-sm ml-1">
+                                (筛选自 {allModels.length} 条)
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -2447,10 +3099,12 @@ export default function ModelsPage() {
                   </div>
                 ) : (
                   <div className="flex-1 overflow-auto">
-                      <table className="w-full caption-bottom text-sm min-w-[800px]">
+                      <table className="w-full caption-bottom text-sm min-w-[1200px]">
                         <thead className="sticky top-0 bg-white/60 backdrop-blur-sm z-20 shadow-sm border-b border-gray-200/50">
                           <TableRow className="hover:bg-gray-50/50 border-0">
                             <TableHead className="text-gray-700 font-semibold min-w-[200px]">配置名称</TableHead>
+                            <TableHead className="text-gray-700 font-semibold min-w-[250px]">模型地址</TableHead>
+                            <TableHead className="text-gray-700 font-semibold min-w-[100px]">模型维度</TableHead>
                             <TableHead className="text-gray-700 font-semibold min-w-[120px]">模型类型</TableHead>
                             <TableHead className="text-gray-700 font-semibold min-w-[150px]">创建时间</TableHead>
                             <TableHead className="text-gray-700 font-semibold min-w-[100px] text-right">操作</TableHead>
@@ -2471,6 +3125,37 @@ export default function ModelsPage() {
                                 </div>
                               </TableCell>
                               
+                              <TableCell className="text-gray-600">
+                                <div className="flex items-center gap-2">
+                                  <div className="text-sm font-mono break-all flex-1">
+                                    {model.model_base_url || '未设置'}
+                                  </div>
+                                  {model.model_base_url && model.model_base_url !== '未设置' && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 w-6 p-0 hover:bg-blue-100 hover:text-blue-600 shrink-0"
+                                      title="复制模型地址"
+                                      onClick={() => copyModelAddress(model.model_base_url)}
+                                    >
+                                      <Copy className="h-3 w-3" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </TableCell>
+
+                              <TableCell className="text-gray-600">
+                                <div className="text-sm">
+                                  {model.embedding_dim ? (
+                                    <span className="font-mono bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs">
+                                      {model.embedding_dim}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </div>
+                              </TableCell>
+
                               <TableCell>
                                 <Badge variant="outline" className={`text-xs ${
                                   model.model_type === 'embedding' ? 'bg-purple-100 text-purple-700 border-purple-200' :
@@ -3336,139 +4021,190 @@ export default function ModelsPage() {
                 <div className="space-y-6">
                   {datasetInfo.code === 200 ? (
                     <div className="space-y-6">
-                      {/* 基本信息卡片 */}
-                      {datasetInfo.data && (
-                        <div className="bg-gradient-to-br from-blue-50 via-indigo-50 to-blue-50 rounded-2xl p-6 border border-blue-100 shadow-sm">
-                          <div className="flex items-center gap-3 mb-6">
-                            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
-                              <FileText className="h-4 w-4 text-white" />
+                      {/* 数据集分割信息表格 */}
+                      {datasetInfo.data && datasetInfo.data.data_sources && (
+                        <div className="space-y-6">
+                          {/* 复制JSON按钮 */}
+                          <div className="flex justify-end">
+                            <button
+                              onClick={() => {
+                                const jsonString = JSON.stringify(datasetInfo.data, null, 2)
+                                navigator.clipboard.writeText(jsonString).then(() => {
+                                  toast({
+                                    title: "复制成功",
+                                    description: "数据集信息已复制到剪贴板",
+                                  })
+                                }).catch(() => {
+                                  // 备选方案
+                                  const textArea = document.createElement('textarea')
+                                  textArea.value = jsonString
+                                  document.body.appendChild(textArea)
+                                  textArea.select()
+                                  try {
+                                    document.execCommand('copy')
+                                    toast({
+                                      title: "复制成功",
+                                      description: "数据集信息已复制到剪贴板",
+                                    })
+                                  } catch (err) {
+                                    toast({
+                                      variant: "destructive",
+                                      title: "复制失败",
+                                      description: "无法复制到剪贴板",
+                                    })
+                                  }
+                                  document.body.removeChild(textArea)
+                                })
+                              }}
+                              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-xl transition-all duration-200 font-medium text-sm shadow-lg hover:shadow-xl transform hover:scale-105"
+                            >
+                              <span>📋</span>
+                              复制完整JSON
+                            </button>
+                          </div>
+
+                          {/* 为每个数据源创建独立的表格 */}
+                          {datasetInfo.data.data_sources.map((dataSource: any, sourceIndex: number) => (
+                            <div key={sourceIndex} className="bg-gradient-to-br from-blue-50 via-indigo-50 to-blue-50 rounded-2xl p-6 border border-blue-100 shadow-sm">
+                              {/* 数据源标题 */}
+                              <div className="flex items-center gap-3 mb-6">
+                                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                                  <Database className="h-4 w-4 text-white" />
+                                </div>
+                                <div>
+                                  <h4 className="text-lg font-semibold text-blue-900">
+                                    {dataSource.dataset_base_name}
+                                  </h4>
+                                  <p className="text-sm text-blue-700 mt-1">
+                                    Source ID: {dataSource.data_source_id} | Path: {dataSource.dataset_path}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* 数据分割表格 */}
+                              <div className="bg-white/80 rounded-xl border border-blue-200/50 backdrop-blur-sm overflow-hidden">
+                                <Table>
+                                  <TableHeader>
+                                    <TableRow className="bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-100 hover:to-indigo-100">
+                                      <TableHead className="font-semibold text-blue-800 border-r border-blue-200/50">Split Type</TableHead>
+                                      <TableHead className="font-semibold text-blue-800 border-r border-blue-200/50">Field</TableHead>
+                                      <TableHead className="font-semibold text-blue-800">Value</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {dataSource.splits && Object.entries(dataSource.splits).map(([splitType, splitData]: [string, any]) => {
+                                      const splitFields = [
+                                        'id', 'dataset_name', 'status', 'samples', 'actual_samples',
+                                        'loss_function', 'evaluator', 'target_column', 'label_type'
+                                      ]
+
+                                      return splitFields.map((field, fieldIndex) => {
+                                        const value = splitData[field]
+                                        if (value === undefined || value === null) return null
+
+                                        // 获取行样式
+                                        const getRowStyle = (field: string, splitType: string) => {
+                                          const baseStyle = 'border-b border-blue-100/50 transition-all duration-200'
+
+                                          if (splitType === 'train') {
+                                            return `${baseStyle} bg-green-50/30 hover:bg-green-50/50 border-l-2 border-green-300`
+                                          } else if (splitType === 'test') {
+                                            return `${baseStyle} bg-orange-50/30 hover:bg-orange-50/50 border-l-2 border-orange-300`
+                                          } else if (splitType === 'eval') {
+                                            return `${baseStyle} bg-purple-50/30 hover:bg-purple-50/50 border-l-2 border-purple-300`
+                                          }
+
+                                          return `${baseStyle} hover:bg-gray-50/50`
+                                        }
+
+                                        // 格式化值显示
+                                        const formatValue = (field: string, value: any) => {
+                                          if (field === 'samples' || field === 'actual_samples') {
+                                            return typeof value === 'number' ? value.toLocaleString() : value
+                                          }
+                                          if (field === 'status') {
+                                            return value === 'loaded' ? '✅ loaded' : `🔵 ${value}`
+                                          }
+                                          if (field === 'evaluator' && value === null) {
+                                            return '❌ null'
+                                          }
+                                          return value
+                                        }
+
+                                        // 获取字段图标
+                                        const getFieldIcon = (field: string) => {
+                                          switch (field) {
+                                            case 'id': return '🆔'
+                                            case 'dataset_name': return '📂'
+                                            case 'status': return '🔵'
+                                            case 'samples': return '📊'
+                                            case 'actual_samples': return '📈'
+                                            case 'loss_function': return '⚙️'
+                                            case 'evaluator': return '🔍'
+                                            case 'target_column': return '🏷️'
+                                            case 'label_type': return '🔤'
+                                            default: return '📋'
+                                          }
+                                        }
+
+                                        return (
+                                          <TableRow key={`${splitType}-${field}`} className={getRowStyle(field, splitType)}>
+                                            <TableCell className="font-medium text-gray-700 border-r border-blue-200/50 py-3">
+                                              {fieldIndex === 0 ? (
+                                                <div className="flex items-center gap-2">
+                                                  <div className={`w-3 h-3 rounded-full ${
+                                                    splitType === 'train' ? 'bg-green-400' :
+                                                    splitType === 'test' ? 'bg-orange-400' :
+                                                    splitType === 'eval' ? 'bg-purple-400' : 'bg-gray-400'
+                                                  }`}></div>
+                                                  <span className="font-semibold text-sm uppercase">{splitType}</span>
+                                                </div>
+                                              ) : (
+                                                <div className="ml-5 text-gray-400">∙</div>
+                                              )}
+                                            </TableCell>
+                                            <TableCell className="font-medium text-gray-700 border-r border-blue-200/50 py-3">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-sm">{getFieldIcon(field)}</span>
+                                                <code className="text-sm font-mono">{field}</code>
+                                              </div>
+                                            </TableCell>
+                                            <TableCell className="py-3">
+                                              <div className="text-gray-800">
+                                                {field === 'samples' || field === 'actual_samples' ? (
+                                                  <span className="font-bold text-green-700 text-base">
+                                                    {formatValue(field, value)}
+                                                  </span>
+                                                ) : field === 'id' ? (
+                                                  <code className="text-xs bg-gray-100 px-2 py-1 rounded font-mono">
+                                                    {formatValue(field, value)}
+                                                  </code>
+                                                ) : field === 'dataset_name' ? (
+                                                  <span className="font-medium text-blue-700">
+                                                    {formatValue(field, value)}
+                                                  </span>
+                                                ) : (
+                                                  <span className={
+                                                    field === 'loss_function' ? 'font-mono text-sm bg-blue-50 px-2 py-1 rounded border' :
+                                                    field === 'target_column' ? 'font-mono text-sm bg-green-50 px-2 py-1 rounded border' :
+                                                    ''
+                                                  }>
+                                                    {formatValue(field, value)}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </TableCell>
+                                          </TableRow>
+                                        )
+                                      }).filter(Boolean)
+                                    })}
+                                  </TableBody>
+                                </Table>
+                              </div>
                             </div>
-                            <h4 className="text-lg font-semibold text-blue-900">数据集基本信息</h4>
-                          </div>
-                          
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            {datasetInfo.data.dataset_name && (
-                              <div className="bg-white/80 rounded-xl p-4 border border-blue-200/50 backdrop-blur-sm">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-gray-600">数据集名称</span>
-                                  <Database className="h-4 w-4 text-blue-400" />
-                                </div>
-                                <p className="font-mono text-blue-700 font-semibold mt-2 text-base">{datasetInfo.data.dataset_name}</p>
-                              </div>
-                            )}
-                            
-                            {datasetInfo.data.dataset_path && (
-                              <div className="bg-white/80 rounded-xl p-4 border border-blue-200/50 backdrop-blur-sm">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-gray-600">数据集路径</span>
-                                  <FileText className="h-4 w-4 text-blue-400" />
-                                </div>
-                                <p className="font-mono text-blue-700 font-medium mt-2 text-sm break-all">{datasetInfo.data.dataset_path}</p>
-                              </div>
-                            )}
-                            
-                            {datasetInfo.data.total_samples !== undefined && (
-                              <div className="bg-white/80 rounded-xl p-4 border border-blue-200/50 backdrop-blur-sm">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-gray-600">总样本数</span>
-                                  <div className="w-4 h-4 bg-blue-400 rounded-sm flex items-center justify-center">
-                                    <span className="text-white text-xs font-bold">#</span>
-                                  </div>
-                                </div>
-                                <p className="text-2xl font-bold text-blue-700 mt-2">{datasetInfo.data.total_samples.toLocaleString()}</p>
-                              </div>
-                            )}
-                            
-                            {datasetInfo.data.train_samples !== undefined && (
-                              <div className="bg-white/80 rounded-xl p-4 border border-green-200/50 backdrop-blur-sm">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-gray-600">训练样本数</span>
-                                  <div className="w-4 h-4 bg-green-400 rounded-sm flex items-center justify-center">
-                                    <span className="text-white text-xs font-bold">T</span>
-                                  </div>
-                                </div>
-                                <p className="text-2xl font-bold text-green-700 mt-2">{datasetInfo.data.train_samples.toLocaleString()}</p>
-                              </div>
-                            )}
-                            
-                            {datasetInfo.data.val_samples !== undefined && (
-                              <div className="bg-white/80 rounded-xl p-4 border border-orange-200/50 backdrop-blur-sm">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-gray-600">验证样本数</span>
-                                  <div className="w-4 h-4 bg-orange-400 rounded-sm flex items-center justify-center">
-                                    <span className="text-white text-xs font-bold">V</span>
-                                  </div>
-                                </div>
-                                <p className="text-2xl font-bold text-orange-700 mt-2">{datasetInfo.data.val_samples.toLocaleString()}</p>
-                              </div>
-                            )}
-                            
-                            {datasetInfo.data.dataset_size && (
-                              <div className="bg-white/80 rounded-xl p-4 border border-purple-200/50 backdrop-blur-sm">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-gray-600">数据集大小</span>
-                                  <div className="w-4 h-4 bg-purple-400 rounded-sm flex items-center justify-center">
-                                    <span className="text-white text-xs font-bold">S</span>
-                                  </div>
-                                </div>
-                                <p className="font-mono text-purple-700 font-semibold mt-2 text-base">{datasetInfo.data.dataset_size}</p>
-                              </div>
-                            )}
-                          </div>
+                          ))}
                         </div>
                       )}
-
-                    {/* 详细JSON数据 */}
-                    <div className="bg-gradient-to-br from-slate-50 via-gray-50 to-slate-50 rounded-2xl p-6 border border-slate-200 shadow-sm">
-                      <div className="flex items-center justify-between mb-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-gradient-to-br from-slate-500 to-gray-600 rounded-lg flex items-center justify-center">
-                            <FileText className="h-4 w-4 text-white" />
-                          </div>
-                          <h4 className="text-lg font-semibold text-slate-900">完整数据集信息</h4>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const jsonString = JSON.stringify(datasetInfo.data, null, 2)
-                            navigator.clipboard.writeText(jsonString).then(() => {
-                              toast({
-                                title: "复制成功",
-                                description: "数据集信息已复制到剪贴板",
-                              })
-                            }).catch(() => {
-                              // 备选方案
-                              const textArea = document.createElement('textarea')
-                              textArea.value = jsonString
-                              document.body.appendChild(textArea)
-                              textArea.select()
-                              try {
-                                document.execCommand('copy')
-                                toast({
-                                  title: "复制成功", 
-                                  description: "数据集信息已复制到剪贴板",
-                                })
-                              } catch (err) {
-                                toast({
-                                  variant: "destructive",
-                                  title: "复制失败",
-                                  description: "无法复制到剪贴板",
-                                })
-                              }
-                              document.body.removeChild(textArea)
-                            })
-                          }}
-                          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-500 to-gray-600 hover:from-slate-600 hover:to-gray-700 text-white rounded-xl transition-all duration-200 font-medium text-sm shadow-lg hover:shadow-xl transform hover:scale-105"
-                        >
-                          <span>📋</span>
-                          复制JSON
-                        </button>
-                      </div>
-                      <div className="bg-white/80 rounded-xl border border-slate-200/80 backdrop-blur-sm overflow-hidden">
-                        <pre className="p-4 text-sm font-mono overflow-x-auto whitespace-pre-wrap max-h-96 overflow-y-auto text-slate-700 leading-relaxed">
-                          {JSON.stringify(datasetInfo.data, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
                   </div>
                 ) : (
                   <div className="bg-gradient-to-br from-red-50 via-rose-50 to-red-50 rounded-2xl p-6 border border-red-200 shadow-sm">
@@ -3824,7 +4560,7 @@ export default function ModelsPage() {
       {showResultsDialog && selectedTaskForResults && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={(e) => {
           if (e.target === e.currentTarget) {
-            stopLossPolling()
+            stopResultsPolling()
             setShowResultsDialog(false)
           }
         }}>
@@ -3849,7 +4585,7 @@ export default function ModelsPage() {
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    stopLossPolling()
+                    stopResultsPolling()
                     setShowResultsDialog(false)
                   }}
                   className="h-10 w-10 p-0 hover:bg-white/60 rounded-xl transition-all duration-200"
@@ -3885,12 +4621,12 @@ export default function ModelsPage() {
                       </div>
                       
 
-                      {/* 完整的eval_results数据表格 */}
+                      {/* 任务基本信息 */}
                       <div className="mb-6 bg-white/80 rounded-xl border border-green-200/50 overflow-hidden">
                         <div className="bg-gradient-to-r from-green-100 to-emerald-100 px-4 py-3 border-b border-green-200">
                           <h5 className="text-md font-semibold text-green-800 flex items-center gap-2">
                             <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                            评估结果详情
+                            任务基本信息
                           </h5>
                         </div>
                         <div className="p-4">
@@ -3898,262 +4634,230 @@ export default function ModelsPage() {
                             <table className="w-full text-sm">
                               <thead>
                                 <tr className="border-b border-green-200">
-                                  <th className="text-left py-2 px-3 font-medium text-green-800">指标</th>
-                                  <th className="text-right py-2 px-3 font-medium text-green-800">数值</th>
+                                  <th className="text-left py-2 px-3 font-medium text-green-800">Field</th>
+                                  <th className="text-right py-2 px-3 font-medium text-green-800">Value</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-green-100">
-                                {evalResults.data.task_id && (
-                                  <tr>
-                                    <td className="py-2 px-3 text-gray-700">任务ID</td>
-                                    <td className="py-2 px-3 text-right font-mono text-green-600 text-xs">{evalResults.data.task_id}</td>
-                                  </tr>
-                                )}
-                                {evalResults.data.task_name && (
-                                  <tr>
-                                    <td className="py-2 px-3 text-gray-700">任务名称</td>
-                                    <td className="py-2 px-3 text-right font-medium text-green-700">{evalResults.data.task_name}</td>
-                                  </tr>
-                                )}
-                                {evalResults.data.task_status && (
-                                  <tr>
-                                    <td className="py-2 px-3 text-gray-700">任务状态</td>
-                                    <td className="py-2 px-3 text-right">
-                                      <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                        evalResults.data.task_status.toLowerCase() === 'succeeded' 
-                                          ? 'bg-green-100 text-green-700'
-                                          : 'bg-gray-100 text-gray-700'
-                                      }`}>
-                                        {evalResults.data.task_status}
-                                      </span>
-                                    </td>
-                                  </tr>
-                                )}
-                                {evalResults.data.train_type && (
-                                  <tr>
-                                    <td className="py-2 px-3 text-gray-700">训练类型</td>
-                                    <td className="py-2 px-3 text-right">
-                                      <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                        evalResults.data.train_type === 'embedding' 
-                                          ? 'bg-purple-100 text-purple-700'
-                                          : 'bg-green-100 text-green-700'
-                                      }`}>
-                                        {evalResults.data.train_type === 'embedding' ? 'Embedding' : 'Reranker'}
-                                      </span>
-                                    </td>
-                                  </tr>
-                                )}
-                                {evalResults.data.best_train_loss !== undefined && (
-                                  <tr>
-                                    <td className="py-2 px-3 text-gray-700">最佳训练Loss</td>
-                                    <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.best_train_loss != null ? evalResults.data.best_train_loss.toFixed(6) : 'N/A'}</td>
-                                  </tr>
-                                )}
-                                {evalResults.data.best_eval_loss !== undefined && (
-                                  <tr>
-                                    <td className="py-2 px-3 text-gray-700">最佳评估Loss</td>
-                                    <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.best_eval_loss != null ? evalResults.data.best_eval_loss.toFixed(6) : 'N/A'}</td>
-                                  </tr>
-                                )}
-                                {evalResults.data.evaluation_summary && (
-                                  <>
-                                    {typeof evalResults.data.evaluation_summary === 'object' ? (
-                                      <>
-                                        {evalResults.data.evaluation_summary.total_datasets && (
-                                          <tr>
-                                            <td className="py-2 px-3 text-gray-700">总数据集数</td>
-                                            <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.evaluation_summary.total_datasets}</td>
-                                          </tr>
-                                        )}
-                                        {evalResults.data.evaluation_summary.datasets_with_base_results && (
-                                          <tr>
-                                            <td className="py-2 px-3 text-gray-700">基础结果数据集</td>
-                                            <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.evaluation_summary.datasets_with_base_results}</td>
-                                          </tr>
-                                        )}
-                                        {evalResults.data.evaluation_summary.datasets_with_final_results && (
-                                          <tr>
-                                            <td className="py-2 px-3 text-gray-700">最终结果数据集</td>
-                                            <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.evaluation_summary.datasets_with_final_results}</td>
-                                          </tr>
-                                        )}
-                                      </>
-                                    ) : (
-                                      <tr>
-                                        <td className="py-2 px-3 text-gray-700">评估摘要</td>
-                                        <td className="py-2 px-3 text-right text-gray-600 max-w-xs truncate" title={evalResults.data.evaluation_summary}>
-                                          {evalResults.data.evaluation_summary}
-                                        </td>
-                                      </tr>
-                                    )}
-                                  </>
-                                )}
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">task_id</td>
+                                  <td className="py-2 px-3 text-right font-mono text-green-600 text-xs">{evalResults.data.task_id}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">task_status</td>
+                                  <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.task_status}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">task_name</td>
+                                  <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.task_name}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">train_type</td>
+                                  <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.train_type}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">best_train_loss</td>
+                                  <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.best_train_loss}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">best_eval_loss</td>
+                                  <td className="py-2 px-3 text-right font-mono text-green-600">{evalResults.data.best_eval_loss || 'null'}</td>
+                                </tr>
                               </tbody>
                             </table>
                           </div>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        {evalResults.data.final_eval_loss !== undefined && (
-                          <div className="bg-white/80 rounded-xl p-4 border border-green-200/50 backdrop-blur-sm">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium text-gray-600">最终评估Loss</span>
-                              <TrendingUp className="h-4 w-4 text-green-400" />
-                            </div>
-                            <p className="font-mono text-green-700 font-medium mt-2 text-sm">{evalResults.data.final_eval_loss != null ? evalResults.data.final_eval_loss.toFixed(6) : 'N/A'}</p>
+                      {/* 评估摘要 */}
+                      <div className="mb-6 bg-white/80 rounded-xl border border-blue-200/50 overflow-hidden">
+                        <div className="bg-gradient-to-r from-blue-100 to-sky-100 px-4 py-3 border-b border-blue-200">
+                          <h5 className="text-md font-semibold text-blue-800 flex items-center gap-2">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                            evaluation_summary
+                          </h5>
+                        </div>
+                        <div className="p-4">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-blue-200">
+                                  <th className="text-left py-2 px-3 font-medium text-blue-800">Field</th>
+                                  <th className="text-right py-2 px-3 font-medium text-blue-800">Value</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-blue-100">
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">total_datasets</td>
+                                  <td className="py-2 px-3 text-right font-mono text-blue-600">{evalResults.data.evaluation_summary?.total_datasets}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">datasets_with_base_results</td>
+                                  <td className="py-2 px-3 text-right font-mono text-blue-600">{evalResults.data.evaluation_summary?.datasets_with_base_results}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">datasets_with_final_results</td>
+                                  <td className="py-2 px-3 text-right font-mono text-blue-600">{evalResults.data.evaluation_summary?.datasets_with_final_results}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">train_datasets</td>
+                                  <td className="py-2 px-3 text-right font-mono text-blue-600">{evalResults.data.evaluation_summary?.train_datasets}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">eval_datasets</td>
+                                  <td className="py-2 px-3 text-right font-mono text-blue-600">{evalResults.data.evaluation_summary?.eval_datasets}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2 px-3 text-gray-700">test_datasets</td>
+                                  <td className="py-2 px-3 text-right font-mono text-blue-600">{evalResults.data.evaluation_summary?.test_datasets}</td>
+                                </tr>
+                              </tbody>
+                            </table>
                           </div>
-                        )}
-                        {evalResults.data.eval_accuracy !== undefined && (
-                          <div className="bg-white/80 rounded-xl p-4 border border-green-200/50 backdrop-blur-sm">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium text-gray-600">评估准确率</span>
-                              <div className="w-4 h-4 bg-green-400 rounded-sm flex items-center justify-center">
-                                <span className="text-white text-xs font-bold">%</span>
-                              </div>
-                            </div>
-                            <p className="text-2xl font-bold text-green-700 mt-2">{evalResults.data.eval_accuracy != null ? (evalResults.data.eval_accuracy * 100).toFixed(2) : 'N/A'}%</p>
-                          </div>
-                        )}
-                        {evalResults.data.eval_f1 !== undefined && (
-                          <div className="bg-white/80 rounded-xl p-4 border border-green-200/50 backdrop-blur-sm">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium text-gray-600">F1分数</span>
-                              <div className="w-4 h-4 bg-green-400 rounded-sm flex items-center justify-center">
-                                <span className="text-white text-xs font-bold">F</span>
-                              </div>
-                            </div>
-                            <p className="font-mono text-green-700 font-semibold mt-2 text-base">{evalResults.data.eval_f1 != null ? evalResults.data.eval_f1.toFixed(4) : 'N/A'}</p>
-                          </div>
-                        )}
-                        {evalResults.data.best_model_step !== undefined && (
-                          <div className="bg-white/80 rounded-xl p-4 border border-green-200/50 backdrop-blur-sm">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium text-gray-600">最佳模型步骤</span>
-                              <div className="w-4 h-4 bg-green-400 rounded-sm flex items-center justify-center">
-                                <span className="text-white text-xs font-bold">S</span>
-                              </div>
-                            </div>
-                            <p className="text-2xl font-bold text-green-700 mt-2">{evalResults.data.best_model_step}</p>
-                          </div>
-                        )}
+                        </div>
                       </div>
+
                       
-                      {/* Eval和Test结果表格 */}
+                      {/* eval_results - 按data_source_id分组显示 */}
                       <div className="mt-6 space-y-6">
-                        {/* Eval结果表格 */}
+
+                        {/* Eval 结果 */}
                         {evalResults.data.eval_results?.eval && evalResults.data.eval_results.eval.length > 0 && (
-                          <div className="bg-white/60 rounded-xl p-5 border border-green-200/50">
-                            <h5 className="text-lg font-semibold text-green-800 mb-4 flex items-center gap-2">
-                              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                              Eval 评估结果
+                          <div className="space-y-4">
+                            <h5 className="text-lg font-semibold text-purple-800 mb-4 flex items-center gap-2">
+                              <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
+                              eval
                             </h5>
-                            
-                            {/* 使用表格格式显示 */}
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr className="border-b border-green-200">
-                                    <th className="text-left py-3 px-4 font-medium text-green-800">指标</th>
-                                    <th className="text-center py-3 px-4 font-medium text-blue-700">Base Results</th>
-                                    <th className="text-center py-3 px-4 font-medium text-green-700">Final Results</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {/* 动态生成行，每个指标一行 */}
-                                  {(() => {
-                                    // eval_results.eval 是数组，取第一个元素
-                                    const evalData = evalResults.data.eval_results.eval?.[0];
-                                    if (!evalData) return <tr><td colSpan={3} className="py-4 text-center text-gray-500">暂无数据</td></tr>;
-                                    
-                                    const baseResults = evalData.base_eval_results || {};
-                                    const finalResults = evalData.final_eval_results || {};
-                                    
-                                    // 获取所有唯一的指标名称
-                                    const allMetrics = [...new Set([...Object.keys(baseResults), ...Object.keys(finalResults)])];
-                                    
-                                    return allMetrics.map(metric => {
-                                      const baseValue = baseResults[metric];
-                                      const finalValue = finalResults[metric];
-                                      
-                                      return (
-                                        <tr key={metric} className="border-b border-green-100">
-                                          <td className="py-2 px-4 font-medium text-gray-700 text-xs">{metric}</td>
-                                          <td className="py-2 px-4 text-center">
-                                            <span className="font-mono text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
-                                              {baseValue !== undefined && baseValue !== null ? (typeof baseValue === 'number' ? baseValue.toFixed(6) : baseValue) : '-'}
-                                            </span>
-                                          </td>
-                                          <td className="py-2 px-4 text-center">
-                                            <span className="font-mono text-green-600 bg-green-50 px-2 py-1 rounded text-sm">
-                                              {finalValue !== undefined && finalValue !== null ? (typeof finalValue === 'number' ? finalValue.toFixed(6) : finalValue) : '-'}
-                                            </span>
-                                          </td>
-                                        </tr>
-                                      );
-                                    });
-                                  })()}
-                                </tbody>
-                              </table>
-                            </div>
+                            {evalResults.data.eval_results.eval.map((evalItem: any, index: number) => (
+                              <div key={index} className="bg-purple-50 rounded-xl p-5 border border-purple-200/50">
+                                <div className="mb-4">
+                                  <h6 className="text-md font-semibold text-purple-700 mb-2">
+                                    data_source_id: {evalItem.data_source_id} - {evalItem.dataset_name}
+                                  </h6>
+                                  <p className="text-sm text-purple-600">
+                                    Dataset ID: {evalItem.dataset_id} | Status: {evalItem.evaluation_status}
+                                  </p>
+                                </div>
+                                <div className="bg-white/80 rounded-xl border border-purple-200/50 overflow-hidden">
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="bg-gradient-to-r from-purple-100 to-violet-100 border-b border-purple-200">
+                                        <th className="text-left py-3 px-4 font-medium text-purple-800">Metric</th>
+                                        <th className="text-center py-3 px-4 font-medium text-blue-700">base_eval_results</th>
+                                        <th className="text-center py-3 px-4 font-medium text-green-700">final_eval_results</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(() => {
+                                        const baseResults = evalItem.base_eval_results || {};
+                                        const finalResults = evalItem.final_eval_results || {};
+                                        const allMetrics = [...new Set([...Object.keys(baseResults), ...Object.keys(finalResults)])];
+
+                                        if (allMetrics.length === 0) {
+                                          return (
+                                            <tr>
+                                              <td colSpan={3} className="py-4 text-center text-gray-500">
+                                                base_eval_results: {evalItem.base_eval_results === null ? 'null' : 'empty'}, final_eval_results: {evalItem.final_eval_results === null ? 'null' : 'empty'}
+                                              </td>
+                                            </tr>
+                                          );
+                                        }
+
+                                        return allMetrics.map(metric => (
+                                          <tr key={metric} className="border-b border-purple-100">
+                                            <td className="py-3 px-4 font-medium text-gray-700">{metric}</td>
+                                            <td className="py-3 px-4 text-center">
+                                              <span className="font-mono text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
+                                                {baseResults[metric] !== undefined && baseResults[metric] !== null
+                                                  ? (typeof baseResults[metric] === 'number' ? baseResults[metric].toFixed(6) : baseResults[metric])
+                                                  : 'null'}
+                                              </span>
+                                            </td>
+                                            <td className="py-3 px-4 text-center">
+                                              <span className="font-mono text-green-600 bg-green-50 px-2 py-1 rounded text-sm">
+                                                {finalResults[metric] !== undefined && finalResults[metric] !== null
+                                                  ? (typeof finalResults[metric] === 'number' ? finalResults[metric].toFixed(6) : finalResults[metric])
+                                                  : 'null'}
+                                              </span>
+                                            </td>
+                                          </tr>
+                                        ));
+                                      })()}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         )}
-                        
-                        {/* Test结果表格 */}
+
+                        {/* Test 结果 */}
                         {evalResults.data.eval_results?.test && evalResults.data.eval_results.test.length > 0 && (
-                          <div className="bg-white/60 rounded-xl p-5 border border-green-200/50">
-                            <h5 className="text-lg font-semibold text-green-800 mb-4 flex items-center gap-2">
-                              <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
-                              Test 评估结果
+                          <div className="space-y-4 mt-8">
+                            <h5 className="text-lg font-semibold text-orange-800 mb-4 flex items-center gap-2">
+                              <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
+                              test
                             </h5>
-                            
-                            {/* 使用表格格式显示 */}
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr className="border-b border-green-200">
-                                    <th className="text-left py-3 px-4 font-medium text-green-800">指标</th>
-                                    <th className="text-center py-3 px-4 font-medium text-purple-700">Base Results</th>
-                                    <th className="text-center py-3 px-4 font-medium text-green-700">Final Results</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {/* 动态生成行，每个指标一行 */}
-                                  {(() => {
-                                    // eval_results.test 是数组，取第一个元素
-                                    const testData = evalResults.data.eval_results.test?.[0];
-                                    if (!testData) return <tr><td colSpan={3} className="py-4 text-center text-gray-500">暂无数据</td></tr>;
-                                    
-                                    const baseResults = testData.base_eval_results || {};
-                                    const finalResults = testData.final_eval_results || {};
-                                    
-                                    // 获取所有唯一的指标名称
-                                    const allMetrics = [...new Set([...Object.keys(baseResults), ...Object.keys(finalResults)])];
-                                    
-                                    return allMetrics.map(metric => {
-                                      const baseValue = baseResults[metric];
-                                      const finalValue = finalResults[metric];
-                                      
-                                      return (
-                                        <tr key={metric} className="border-b border-green-100">
-                                          <td className="py-2 px-4 font-medium text-gray-700 text-xs">{metric}</td>
-                                          <td className="py-2 px-4 text-center">
-                                            <span className="font-mono text-purple-600 bg-purple-50 px-2 py-1 rounded text-sm">
-                                              {baseValue !== undefined && baseValue !== null ? (typeof baseValue === 'number' ? baseValue.toFixed(6) : baseValue) : '-'}
-                                            </span>
-                                          </td>
-                                          <td className="py-2 px-4 text-center">
-                                            <span className="font-mono text-green-600 bg-green-50 px-2 py-1 rounded text-sm">
-                                              {finalValue !== undefined && finalValue !== null ? (typeof finalValue === 'number' ? finalValue.toFixed(6) : finalValue) : '-'}
-                                            </span>
-                                          </td>
-                                        </tr>
-                                      );
-                                    });
-                                  })()}
-                                </tbody>
-                              </table>
-                            </div>
+                            {evalResults.data.eval_results.test.map((testItem: any, index: number) => (
+                              <div key={index} className="bg-orange-50 rounded-xl p-5 border border-orange-200/50">
+                                <div className="mb-4">
+                                  <h6 className="text-md font-semibold text-orange-700 mb-2">
+                                    data_source_id: {testItem.data_source_id} - {testItem.dataset_name}
+                                  </h6>
+                                  <p className="text-sm text-orange-600">
+                                    Dataset ID: {testItem.dataset_id} | Status: {testItem.evaluation_status}
+                                  </p>
+                                </div>
+                                <div className="bg-white/80 rounded-xl border border-orange-200/50 overflow-hidden">
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="bg-gradient-to-r from-orange-100 to-amber-100 border-b border-orange-200">
+                                        <th className="text-left py-3 px-4 font-medium text-orange-800">Metric</th>
+                                        <th className="text-center py-3 px-4 font-medium text-blue-700">base_eval_results</th>
+                                        <th className="text-center py-3 px-4 font-medium text-green-700">final_eval_results</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(() => {
+                                        const baseResults = testItem.base_eval_results || {};
+                                        const finalResults = testItem.final_eval_results || {};
+                                        const allMetrics = [...new Set([...Object.keys(baseResults), ...Object.keys(finalResults)])];
+
+                                        if (allMetrics.length === 0) {
+                                          return (
+                                            <tr>
+                                              <td colSpan={3} className="py-4 text-center text-gray-500">
+                                                base_eval_results: {testItem.base_eval_results === null ? 'null' : 'empty'}, final_eval_results: {testItem.final_eval_results === null ? 'null' : 'empty'}
+                                              </td>
+                                            </tr>
+                                          );
+                                        }
+
+                                        return allMetrics.map(metric => (
+                                          <tr key={metric} className="border-b border-orange-100">
+                                            <td className="py-3 px-4 font-medium text-gray-700">{metric}</td>
+                                            <td className="py-3 px-4 text-center">
+                                              <span className="font-mono text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
+                                                {baseResults[metric] !== undefined && baseResults[metric] !== null
+                                                  ? (typeof baseResults[metric] === 'number' ? baseResults[metric].toFixed(6) : baseResults[metric])
+                                                  : 'null'}
+                                              </span>
+                                            </td>
+                                            <td className="py-3 px-4 text-center">
+                                              <span className="font-mono text-green-600 bg-green-50 px-2 py-1 rounded text-sm">
+                                                {finalResults[metric] !== undefined && finalResults[metric] !== null
+                                                  ? (typeof finalResults[metric] === 'number' ? finalResults[metric].toFixed(6) : finalResults[metric])
+                                                  : 'null'}
+                                              </span>
+                                            </td>
+                                          </tr>
+                                        ));
+                                      })()}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
@@ -4249,11 +4953,12 @@ export default function ModelsPage() {
                             ...trainLossData.map(item => item.trainLoss),
                             ...evalLossData.map(item => item.evalLoss)
                           ].filter(val => val !== null);
-                          
+
                           const maxLoss = Math.max(...allLossValues);
                           const minLoss = Math.min(...allLossValues);
                           const lossRange = maxLoss - minLoss;
-                          const padding = lossRange * 0.1; // 10% padding
+                          // 如果范围为0，使用固定padding；否则使用10%的padding
+                          const padding = lossRange === 0 ? Math.abs(maxLoss) * 0.1 + 0.1 : lossRange * 0.15;
                           
                           // 获取所有step的范围
                           const allSteps = [...new Set([...trainLossData.map(item => item.step), ...evalLossData.map(item => item.step)])];
@@ -4261,24 +4966,24 @@ export default function ModelsPage() {
                           const minStep = Math.min(...allSteps);
                           const stepRange = maxStep - minStep;
                           
-                          const chartWidth = 800;
-                          const chartHeight = 400;
-                          const chartPadding = 60;
+                          const chartWidth = 1000;
+                          const chartHeight = 450;
+                          const chartPadding = 100;
                           
                           const xScale = stepRange > 0 ? (chartWidth - 2 * chartPadding) / stepRange : 0;
                           const yScale = (chartHeight - 2 * chartPadding) / (lossRange + 2 * padding);
                           
                           // 生成训练loss路径
                           const trainLossPath = trainLossData.length > 0 ? trainLossData.map((item: any, index: number) => {
-                            const x = chartPadding + (item.step - minStep) * xScale;
-                            const y = chartHeight - chartPadding - ((item.trainLoss - minLoss + padding) * yScale);
+                            const x = Math.max(chartPadding, Math.min(chartWidth - chartPadding, chartPadding + (item.step - minStep) * xScale));
+                            const y = Math.max(chartPadding, Math.min(chartHeight - chartPadding, chartHeight - chartPadding - ((item.trainLoss - minLoss + padding) * yScale)));
                             return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
                           }).join(' ') : '';
                           
                           // 生成验证loss路径
                           const evalLossPath = evalLossData.length > 0 ? evalLossData.map((item: any, index: number) => {
-                            const x = chartPadding + (item.step - minStep) * xScale;
-                            const y = chartHeight - chartPadding - ((item.evalLoss - minLoss + padding) * yScale);
+                            const x = Math.max(chartPadding, Math.min(chartWidth - chartPadding, chartPadding + (item.step - minStep) * xScale));
+                            const y = Math.max(chartPadding, Math.min(chartHeight - chartPadding, chartHeight - chartPadding - ((item.evalLoss - minLoss + padding) * yScale)));
                             return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
                           }).join(' ') : '';
 
@@ -4318,11 +5023,11 @@ export default function ModelsPage() {
                                         strokeWidth="1"
                                         strokeDasharray="2,2"
                                       />
-                                      <text 
-                                        x={chartPadding - 10} 
-                                        y={line.y + 4} 
-                                        fontSize="10" 
-                                        fill="#6b7280" 
+                                      <text
+                                        x={chartPadding - 30}
+                                        y={line.y + 4}
+                                        fontSize="11"
+                                        fill="#6b7280"
                                         textAnchor="end"
                                       >
                                         {line.value != null ? line.value.toFixed(4) : '0'}
@@ -4392,8 +5097,8 @@ export default function ModelsPage() {
                                   
                                   {/* 训练loss数据点 */}
                                   {trainLossData.map((item: any, index: number) => {
-                                    const x = chartPadding + (item.step - minStep) * xScale;
-                                    const y = chartHeight - chartPadding - ((item.trainLoss - minLoss + padding) * yScale);
+                                    const x = Math.max(chartPadding, Math.min(chartWidth - chartPadding, chartPadding + (item.step - minStep) * xScale));
+                                    const y = Math.max(chartPadding, Math.min(chartHeight - chartPadding, chartHeight - chartPadding - ((item.trainLoss - minLoss + padding) * yScale)));
                                     return (
                                       <circle
                                         key={`train-${index}`}
@@ -4409,8 +5114,8 @@ export default function ModelsPage() {
                                   
                                   {/* 验证loss数据点 */}
                                   {evalLossData.map((item: any, index: number) => {
-                                    const x = chartPadding + (item.step - minStep) * xScale;
-                                    const y = chartHeight - chartPadding - ((item.evalLoss - minLoss + padding) * yScale);
+                                    const x = Math.max(chartPadding, Math.min(chartWidth - chartPadding, chartPadding + (item.step - minStep) * xScale));
+                                    const y = Math.max(chartPadding, Math.min(chartHeight - chartPadding, chartHeight - chartPadding - ((item.evalLoss - minLoss + padding) * yScale)));
                                     return (
                                       <circle
                                         key={`eval-${index}`}
@@ -4497,6 +5202,25 @@ export default function ModelsPage() {
                     </div>
                   </div>
 
+                  {/* 评估指标图表 */}
+                  <div className="mt-8 bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+                    <h4 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                      <BarChart3 className="h-5 w-5 text-blue-600" />
+                      评估指标
+                    </h4>
+
+                    <div>
+                      {lossData ? (
+                        <MultiDataSourceCharts lossData={lossData} />
+                      ) : (
+                        <div className="text-center py-8">
+                          <TrendingUp className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                          <p className="text-gray-500 text-sm">暂无评估数据</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                 </div>
               ) : (
                 <div className="flex items-center justify-center py-16">
@@ -4509,6 +5233,414 @@ export default function ModelsPage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 任务详情弹窗 */}
+      {showTaskDetailDialog && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={(e) => {
+          if (e.target === e.currentTarget) setShowTaskDetailDialog(false)
+        }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200/50">
+            {/* 头部区域 */}
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-8 py-6 border-b border-blue-100/50">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+                    <Info className="h-6 w-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-semibold text-gray-800">任务详情</h3>
+                    <p className="text-sm text-blue-600 mt-1">Training Task Details</p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowTaskDetailDialog(false)}
+                  className="h-10 w-10 p-0 hover:bg-white/80 rounded-xl text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  ✕
+                </Button>
+              </div>
+            </div>
+
+            {/* 内容区域 */}
+            <div className="flex-1 overflow-y-auto">
+              {taskDetailLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="text-center">
+                    <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-6"></div>
+                    <h4 className="text-lg font-medium text-gray-700 mb-2">加载任务详情中...</h4>
+                    <p className="text-sm text-gray-500">请稍候，正在获取详细信息</p>
+                  </div>
+                </div>
+              ) : taskDetailData ? (
+                <div className="p-8 space-y-8">
+                  {/* 主要字段信息 */}
+                  <div>
+                    <h4 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                      <div className="w-2 h-6 bg-gradient-to-b from-blue-500 to-indigo-600 rounded-full"></div>
+                      基本信息
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {Object.entries(taskDetailData).map(([key, value]) => {
+                    // 跳过复杂对象字段，这些在下面单独显示
+                    // 但是training_params字段需要特殊处理
+                    // if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    //   return null
+                    // }
+
+                    // 如果是training_params或process_info字段，在基本信息中以表格形式显示
+                    if (key === 'training_params' || key === 'process_info') {
+                      let processedValue = value;
+
+                      // 如果是字符串，尝试解析为JSON对象
+                      if (typeof value === 'string') {
+                        try {
+                          processedValue = JSON.parse(value);
+                        } catch (error) {
+                          // 解析失败，保持原始字符串
+                          processedValue = value;
+                        }
+                      }
+
+                      return (
+                        <div key={key} className="bg-gradient-to-br from-white to-gray-50/50 rounded-xl p-4 border border-gray-200/50 hover:shadow-md transition-all duration-200 col-span-full">
+                          <div className="flex flex-col gap-3">
+                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                              {key.replace(/_/g, ' ')}
+                            </span>
+                            {typeof processedValue === 'object' && processedValue !== null ? (
+                              // 以表格形式展示
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs border-collapse">
+                                  <thead>
+                                    <tr className="bg-gray-50">
+                                      <th className="text-left p-2 border border-gray-200 font-medium text-gray-700">参数名称</th>
+                                      <th className="text-left p-2 border border-gray-200 font-medium text-gray-700">参数值</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {Object.entries(processedValue as Record<string, any>).map(([paramKey, paramValue], index) => (
+                                      <tr key={paramKey} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                                        <td className="p-2 border border-gray-200 font-medium text-gray-600">
+                                          {paramKey.replace(/_/g, ' ')}
+                                        </td>
+                                        <td className="p-2 border border-gray-200 text-gray-800">
+                                          {typeof paramValue === 'object' && paramValue !== null ? (
+                                            <pre className="text-xs bg-gray-100 rounded p-1 overflow-x-auto">
+                                              {JSON.stringify(paramValue, null, 2)}
+                                            </pre>
+                                          ) : (
+                                            <span className="break-words">
+                                              {paramValue === null || paramValue === undefined ?
+                                                <span className="text-gray-400 italic">null</span> :
+                                                String(paramValue)
+                                              }
+                                            </span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              // 如果不是对象，以字符串形式显示
+                              <span className="text-sm font-medium text-gray-900 break-words">
+                                {String(processedValue)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    // 格式化值的显示
+                    const formatValue = (val: any) => {
+                      if (val === null || val === undefined) return '-'
+                      if (typeof val === 'boolean') return val ? 'true' : 'false'
+                      if (Array.isArray(val)) return val.join(', ')
+
+                      // 格式化时间字段（duration_seconds）
+                      if (key === 'duration_seconds' && typeof val === 'number') {
+                        const hours = Math.floor(val / 3600)
+                        const minutes = Math.floor((val % 3600) / 60)
+                        const seconds = val % 60
+
+                        if (hours > 0) {
+                          return `${hours}h ${minutes}m ${seconds}s`
+                        } else if (minutes > 0) {
+                          return `${minutes}m ${seconds}s`
+                        } else {
+                          return `${seconds}s`
+                        }
+                      }
+
+                      return String(val)
+                    }
+
+                    // 特殊处理状态字段的样式
+                    const isStatusField = key.toLowerCase().includes('status')
+                    const statusValue = String(value || '').toLowerCase()
+
+                    return (
+                      <div key={key} className="bg-gradient-to-br from-white to-gray-50/50 rounded-xl p-4 border border-gray-200/50 hover:shadow-md transition-all duration-200">
+                        <div className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            {key.replace(/_/g, ' ')}
+                          </span>
+                          {isStatusField ? (
+                            <span className={`inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium w-fit shadow-sm ${
+                              statusValue === 'running' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                              statusValue === 'succeeded' || statusValue === 'completed' || statusValue === 'success' ? 'bg-green-100 text-green-800 border border-green-200' :
+                              statusValue === 'failed' || statusValue === 'error' ? 'bg-red-100 text-red-800 border border-red-200' :
+                              statusValue === 'pending' || statusValue === 'waiting' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
+                              statusValue === 'stopped' || statusValue === 'cancelled' ? 'bg-gray-100 text-gray-800 border border-gray-200' :
+                              'bg-blue-50 text-blue-700 border border-blue-100'
+                            }`}>
+                              {formatValue(value)}
+                            </span>
+                          ) : (
+                            <span className="text-sm font-medium text-gray-900 break-words">
+                              {formatValue(value)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                    </div>
+                  </div>
+
+                  {/* 复杂对象字段展示 */}
+                  {Object.entries(taskDetailData).some(([key, value]) => value && typeof value === 'object' && !Array.isArray(value)) && (
+                    <div>
+                      <h4 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                        <div className="w-2 h-6 bg-gradient-to-b from-indigo-500 to-purple-600 rounded-full"></div>
+                        配置详情
+                      </h4>
+                      <div className="space-y-4">
+                        {Object.entries(taskDetailData).map(([key, value]) => {
+                          // 检查是否是需要以表格形式展示的字段
+                          const shouldShowAsTable = key === 'process_info';
+
+                          // 处理 training_params 字段 - 如果是字符串则尝试解析为JSON对象
+                          let processedValue = value;
+                          if (key === 'training_params' && typeof value === 'string') {
+                            try {
+                              processedValue = JSON.parse(value);
+                            } catch (error) {
+                              console.warn('Failed to parse training_params JSON:', error);
+                              processedValue = value;
+                            }
+                          }
+
+                          // 跳过training_params字段，只在基本信息中显示
+                          if (key === 'training_params') {
+                            return null;
+                          }
+
+                          // 如果是表格显示字段，确保有值
+                          if (shouldShowAsTable) {
+                            if (!value && !processedValue) {
+                              return null;
+                            }
+                          } else {
+                            // 非表格字段必须是对象类型才显示
+                            if (!processedValue || typeof processedValue !== 'object' || Array.isArray(processedValue)) {
+                              return null
+                            }
+                          }
+
+                          return (
+                            <div key={key} className="bg-gradient-to-br from-white to-gray-50/50 rounded-xl border border-gray-200/50 overflow-hidden">
+                              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-4 py-3 border-b border-indigo-100/50">
+                                <h5 className="font-semibold text-gray-800 capitalize">
+                                  {key.replace(/_/g, ' ')}
+                                </h5>
+                              </div>
+                              <div className="p-4">
+                                {shouldShowAsTable ? (
+                                  // 以表格形式展示training_params和process_info
+                                  typeof processedValue === 'object' && processedValue !== null ? (
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-sm border-collapse">
+                                        <thead>
+                                          <tr className="bg-gray-50">
+                                            <th className="text-left p-3 border border-gray-200 font-medium text-gray-700 w-1/3">参数名称</th>
+                                            <th className="text-left p-3 border border-gray-200 font-medium text-gray-700">参数值</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {Object.entries(processedValue as Record<string, any>).map(([paramKey, paramValue], index) => (
+                                          <tr key={paramKey} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                                            <td className="p-3 border border-gray-200 font-medium text-gray-600 align-top">
+                                              {paramKey.replace(/_/g, ' ')}
+                                            </td>
+                                            <td className="p-3 border border-gray-200 text-gray-800">
+                                              {typeof paramValue === 'object' && paramValue !== null ? (
+                                                <pre className="text-xs bg-gray-100 rounded p-2 overflow-x-auto whitespace-pre-wrap">
+                                                  {JSON.stringify(paramValue, null, 2)}
+                                                </pre>
+                                              ) : (
+                                                <span className="break-words">
+                                                  {paramValue === null || paramValue === undefined ?
+                                                    <span className="text-gray-400 italic">null</span> :
+                                                    String(paramValue)
+                                                  }
+                                                </span>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : (
+                                  // 如果解析失败，以字符串形式显示
+                                  <pre className="text-xs bg-gray-50 rounded-lg border p-3 overflow-x-auto font-mono">
+                                    {typeof processedValue === 'string' ? processedValue : JSON.stringify(processedValue, null, 2)}
+                                  </pre>
+                                )
+                                ) : (
+                                  // 其他复杂对象仍使用JSON格式
+                                  <pre className="text-xs bg-gray-50 rounded-lg border p-3 overflow-x-auto font-mono">
+                                    {JSON.stringify(processedValue, null, 2)}
+                                  </pre>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 完整原始数据 */}
+                  <div>
+                    <details className="bg-gradient-to-br from-white to-gray-50/50 rounded-xl border border-gray-200/50 overflow-hidden">
+                      <summary className="bg-gradient-to-r from-gray-50 to-slate-50 px-4 py-3 font-semibold text-gray-800 cursor-pointer hover:bg-gray-100 transition-colors border-b border-gray-200/50">
+                        完整原始数据 (Complete Raw Data)
+                      </summary>
+                      <div className="p-4">
+                        <pre className="text-xs bg-gray-50 rounded-lg border p-4 overflow-x-auto font-mono max-h-96">
+                          {JSON.stringify(taskDetailData, null, 2)}
+                        </pre>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center py-16">
+                  <div className="text-center">
+                    <div className="w-16 h-16 bg-gradient-to-br from-gray-200 to-gray-300 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <Info className="h-8 w-8 text-gray-500" />
+                    </div>
+                    <h4 className="text-lg font-medium text-gray-700 mb-2">暂无详情数据</h4>
+                    <p className="text-sm text-gray-500">未能获取到任务的详细信息</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 删除训练任务确认对话框 */}
+      {showDeleteTaskDialog && taskToDelete && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={(e) => {
+          if (e.target === e.currentTarget) setShowDeleteTaskDialog(false)
+        }}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-semibold text-gray-800">确认删除</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDeleteTaskDialog(false)}
+                className="h-8 w-8 p-0 hover:bg-gray-100"
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-gray-600 mb-4">
+                确定要删除训练任务 <strong>"{taskToDelete}"</strong> 吗？
+              </p>
+              <p className="text-sm text-gray-500">
+                此操作不可撤销，将永久删除任务相关的所有数据。
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowDeleteTaskDialog(false)}
+                className="flex-1"
+              >
+                取消
+              </Button>
+              <Button
+                onClick={handleConfirmDeleteTask}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+              >
+                确认删除
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 失败原因弹窗 */}
+      {showErrorDialog && selectedTaskForError && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowErrorDialog(false)}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center">
+                  <AlertTriangle className="h-5 w-5 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800">训练失败原因</h3>
+                  <p className="text-sm text-gray-600">任务: {selectedTaskForError.task_name || selectedTaskForError.model_name || `任务 ${selectedTaskForError.task_id}`}</p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowErrorDialog(false)}
+                className="h-8 w-8 p-0 hover:bg-gray-100"
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="p-6">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="text-sm font-medium text-red-800 mb-2">错误详情</h4>
+                    <pre className="text-sm text-red-700 whitespace-pre-wrap break-words leading-relaxed">
+                      {selectedTaskForError.error_message || '暂无错误信息'}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <Button
+                  onClick={() => setShowErrorDialog(false)}
+                  className="bg-gray-600 hover:bg-gray-700 text-white"
+                >
+                  关闭
+                </Button>
+              </div>
             </div>
           </div>
         </div>

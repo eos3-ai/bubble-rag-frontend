@@ -132,22 +132,30 @@ export class DocumentService {
 
   // 新的文件上传接口（add_doc_task）
   async uploadFile(params: {
-    files: File[]; 
-    doc_knowledge_base_id: string; 
+    files: File[];
+    doc_knowledge_base_id: string;
     chunk_size?: number;
+    data_clean?: string;
+    semantic_split?: string;
+    small2big?: string;
   }): Promise<any> {
     const formData = new FormData()
-    
+
     // 添加文件
     params.files.forEach((file, index) => {
       formData.append('files', file)
     })
-    
+
     // 添加知识库ID
     formData.append('doc_knowledge_base_id', params.doc_knowledge_base_id)
-    
+
     // 添加chunk_size，默认1000
     formData.append('chunk_size', String(params.chunk_size || 1000))
+
+    // 添加新的开关参数，默认为0（关闭）
+    formData.append('data_clean', params.data_clean || '0')
+    formData.append('semantic_split', params.semantic_split || '0')
+    formData.append('small2big', params.small2big || '0')
 
     const response = await api.upload(ENDPOINTS.DOC.ADD_DOC_TASK, formData)
     return response.data
